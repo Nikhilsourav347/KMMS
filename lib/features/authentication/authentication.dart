@@ -31,12 +31,14 @@ class _LoginScreenState extends State<LoginScreen> {
   bool visible = false;
   bool busy = false;
   late String? error = widget.auth.recoveryError;
+  bool needsVerification = false;
 
   Future<void> signIn() async {
     if (busy || !form.currentState!.validate()) return;
     setState(() {
       busy = true;
       error = null;
+      needsVerification = false;
     });
     try {
       final staff = await widget.auth.signIn(
@@ -45,6 +47,26 @@ class _LoginScreenState extends State<LoginScreen> {
         role: role,
       );
       if (mounted) widget.onSignIn?.call(staff);
+    } catch (failure) {
+      if (mounted) {
+        setState(() {
+          error = friendlyError(failure);
+          needsVerification = failure is EmailVerificationRequired;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> resendVerification() async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      await widget.auth.requestEmailVerification(email.text);
+      if (mounted) {
+        setState(() => error = 'Check your email for the verification link.');
+      }
     } catch (failure) {
       if (mounted) setState(() => error = friendlyError(failure));
     } finally {
@@ -193,6 +215,13 @@ class _LoginScreenState extends State<LoginScreen> {
                                           context,
                                         ).colorScheme.error,
                                       ),
+                                    ),
+                                  ),
+                                if (needsVerification)
+                                  TextButton(
+                                    onPressed: busy ? null : resendVerification,
+                                    child: const Text(
+                                      'Resend verification email',
                                     ),
                                   ),
                                 FilledButton.icon(

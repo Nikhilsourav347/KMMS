@@ -79,8 +79,17 @@ Future<MillData> openSupabaseBackend() async {
             .timeout(_authTimeout);
         if (response.redirectType != 'recovery' &&
             response.redirectType != AuthChangeEvent.passwordRecovery.name) {
-          await client.auth.signOut(scope: SignOutScope.local);
-          throw AuthException('The link did not contain a recovery session.');
+          // Email confirmation and profile email changes may also return a
+          // PKCE code. They use normal profile verification on startup.
+          await preferences.remove(recoveryKey);
+          _handledRecovery = true;
+          clearRecoveryUrl();
+          return SupabaseMill(
+            client,
+            recoveryPending: false,
+            recoveryError: null,
+            clearRecovery: () => preferences.remove(recoveryKey),
+          );
         }
         session = response.session;
       }
@@ -134,6 +143,7 @@ bool _isRecoveryUri(Uri uri) {
       uri.queryParameters['type'] == 'recovery' ||
       fragment['type'] == 'recovery' ||
       uri.queryParameters.containsKey('code') ||
+      fragment.containsKey('access_token') ||
       uri.queryParameters.containsKey('error_code') ||
       fragment.containsKey('error_code');
 }
@@ -188,6 +198,9 @@ Future<T> _cloud<T>(Future<T> Function() run) async {
   } on TimeoutException {
     throw _connectionError;
   } on AuthException catch (error) {
+    if (error.code == 'email_not_confirmed') {
+      throw const EmailVerificationRequired();
+    }
     if (error.code == 'invalid_credentials') {
       throw const MillError('The email address or password is incorrect.');
     }
@@ -247,6 +260,7 @@ class SupabaseMill implements MillData {
     _channel = channel;
     for (final table in [
       'machines',
+      'profiles',
       'daily_machine_status',
       'schedules',
       'jobs',
@@ -323,8 +337,11 @@ class SupabaseMill implements MillData {
   });
 
   @override
-  Future<void> removeMachine(int id) =>
-      _mutate('ukm_archive_machine', {'p_id': id});
+  Future<bool> removeMachine(int id) async {
+    final deleted = await _rpc('ukm_remove_machine', {'p_id': id}) == true;
+    _changed();
+    return deleted;
+  }
 
   @override
   Future<List<RowData>> machineDay(DateTime date) async =>
@@ -583,14 +600,14 @@ class SupabaseMillAuth implements MillAuth {
       });
 
   @override
-  Future<void> addAccount(
+  Future<bool> addAccount(
     StaffRole role,
     AccountSetup account, {
     String phone = '',
   }) => _cloud(() async {
     final token = client.auth.currentSession?.accessToken;
     if (token == null) throw const MillError('Sign in again.');
-    await client.functions.invoke(
+    final result = await client.functions.invoke(
       'ukm-create-account',
       headers: {'Authorization': 'Bearer $token'},
       body: {
@@ -601,6 +618,8 @@ class SupabaseMillAuth implements MillAuth {
         'phone': phone,
       },
     );
+    return result.data is RowData &&
+        result.data['verification_requested'] == true;
   });
 
   @override
@@ -629,6 +648,15 @@ class SupabaseMillAuth implements MillAuth {
     await client.auth.resetPasswordForEmail(
       normalizedEmail(email),
       redirectTo: redirect?.toString(),
+    );
+  });
+
+  @override
+  Future<void> requestEmailVerification(String email) => _cloud(() async {
+    if (!validEmail(email)) throw const MillError('Enter a valid work email.');
+    await client.auth.resend(
+      type: OtpType.signup,
+      email: normalizedEmail(email),
     );
   });
 

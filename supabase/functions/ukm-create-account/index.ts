@@ -48,21 +48,23 @@ Deno.serve(async (request) => {
   const phone = typeof input.phone === "string" ? input.phone.trim() : "";
   if ((role !== "admin" && role !== "manager") || !name || name.length > 120 ||
       !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254 ||
-      typeof password !== "string" || password.length < 12 || password.length > 72 ||
+      typeof password !== "string" || password.length < 12 || new TextEncoder().encode(password).length > 72 ||
       phone.length > 40) {
     return respond(400, { message: "Enter a valid name, email, role and password of 12–72 characters." });
   }
 
   const { data: account, error: creationError } = await service.auth.admin.createUser({
-    email, password, email_confirm: true,
+    email, password, email_confirm: false,
+    app_metadata: { ukm_staff_provisioning: { full_name: name, role, phone } },
   });
-  if (creationError || !account.user) return respond(400, { message: "Could not create the account. Check the email and password." });
-  const { error: insertError } = await service.from("profiles").insert({
-    id: account.user.id, full_name: name, role, phone,
-  });
-  if (insertError) {
-    await service.auth.admin.deleteUser(account.user.id);
-    return respond(500, { message: "Could not create the staff profile." });
+  if (creationError?.code === "email_exists" || creationError?.code === "user_already_exists") {
+    return respond(409, { message: "A staff account already uses this email address." });
   }
-  return respond(201, { created: true });
+  if (creationError || !account.user) {
+    return respond(400, { message: "Could not create the staff account. Check the password and try again." });
+  }
+  const { error: verificationError } = await service.auth.resend({
+    type: "signup", email,
+  });
+  return respond(201, { verification_requested: !verificationError });
 });

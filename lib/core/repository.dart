@@ -36,7 +36,7 @@ abstract interface class MillData {
     String type = '',
     String specifications = '',
   });
-  Future<void> removeMachine(int id);
+  Future<bool> removeMachine(int id);
   Future<List<RowData>> machineDay(DateTime date);
   Future<void> setRunning(int id, DateTime date, bool running);
   Future<List<MachineScheduleRow>> machineSchedule(

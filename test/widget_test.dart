@@ -227,7 +227,7 @@ void main() {
               ),
             ),
           );
-          expect(find.text('Mill operations'), findsOneWidget);
+          expect(find.text('Machine Operations'), findsOneWidget);
           for (final module in Module.values) {
             expect(
               find.text(module.titleFor(role)),

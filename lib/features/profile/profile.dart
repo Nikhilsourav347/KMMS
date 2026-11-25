@@ -27,18 +27,25 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
   Future<bool> _form(
     String title,
     List<({String label, String value})> fields,
-    Future<void> Function(List<String>) save,
-  ) async {
+    Future<void> Function(List<String>) save, {
+    Future<void> Function()? recover,
+  }) async {
     final changed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _EditDialog(title: title, fields: fields, save: save),
+      builder: (_) => _EditDialog(
+        title: title,
+        fields: fields,
+        save: save,
+        recover: recover,
+      ),
     );
     if (mounted && changed == true) refresh();
     return changed == true;
   }
 
   Future<void> addAccount(StaffRole role) async {
+    var verificationRequested = false;
     final created = await _form(
       'Add ${role.label}',
       [
@@ -48,7 +55,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
         (label: 'Initial password', value: ''),
       ],
       (v) async {
-        await repository.auth.addAccount(
+        verificationRequested = await repository.auth.addAccount(
           role,
           AccountSetup(v[0], v[1], v[3]),
           phone: v[2],
@@ -56,7 +63,12 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
       },
     );
     if (!mounted || !created) return;
-    notify(context, '${role.label} account created.');
+    notify(
+      context,
+      verificationRequested
+          ? '${role.label} account created. Ask the staff member to check their email to verify it.'
+          : '${role.label} account created. Verification email could not be sent. Check Supabase SMTP before resending.',
+    );
   }
 
   Future<void> editMachine([RowData? machine]) => _form(
@@ -96,14 +108,22 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
     if (!await confirm(
       context,
       'Remove ${machine['name']}?',
-      'This removes the machine from active lists. Historical records are kept.',
+      'An unused machine is permanently deleted. A machine with history is archived and removed from active lists.',
       action: 'Remove',
     )) {
       return;
     }
     try {
-      await repository.removeMachine(machine['id']);
-      if (mounted) ref.invalidate(_profileMachines);
+      final deleted = await repository.removeMachine(machine['id']);
+      if (mounted) {
+        ref.invalidate(_profileMachines);
+        notify(
+          context,
+          deleted
+              ? 'Machine permanently deleted.'
+              : 'Machine archived. Its history was kept.',
+        );
+      }
     } catch (error) {
       if (mounted) notify(context, friendlyError(error));
     }
@@ -202,10 +222,24 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
           child: const Text('Edit profile'),
         ),
         OutlinedButton(
-          onPressed: () => _form('Change password', [
-            (label: 'Current password', value: ''),
-            (label: 'New password', value: ''),
-          ], (v) => repository.auth.changePassword(v[0], v[1])),
+          onPressed: () => _form(
+            'Change password',
+            [
+              (label: 'Current password', value: ''),
+              (label: 'New password', value: ''),
+            ],
+            (v) => repository.auth.changePassword(v[0], v[1]),
+            recover: () async {
+              final profile = await repository.auth.profile();
+              final email = profile['email'];
+              if (email is! String || !validEmail(email)) {
+                throw const MillError(
+                  'Your staff account has no valid email address.',
+                );
+              }
+              await repository.auth.requestRecovery(email);
+            },
+          ),
           child: const Text('Change password'),
         ),
         OutlinedButton(onPressed: widget.logout, child: const Text('Logout')),
@@ -354,10 +388,12 @@ class _EditDialog extends StatefulWidget {
     required this.title,
     required this.fields,
     required this.save,
+    this.recover,
   });
   final String title;
   final List<({String label, String value})> fields;
   final Future<void> Function(List<String>) save;
+  final Future<void> Function()? recover;
   @override
   State<_EditDialog> createState() => _EditState();
 }
@@ -368,6 +404,22 @@ class _EditState extends State<_EditDialog> {
       .toList();
   bool saving = false;
   String? error;
+  bool recoverySent = false;
+
+  Future<void> sendRecovery() async {
+    setState(() {
+      saving = true;
+      error = null;
+    });
+    try {
+      await widget.recover!();
+      if (mounted) setState(() => recoverySent = true);
+    } catch (failure) {
+      if (mounted) setState(() => error = friendlyError(failure));
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
 
   Future<void> save() async {
     setState(() {
@@ -418,6 +470,15 @@ class _EditState extends State<_EditDialog> {
                 decoration: InputDecoration(labelText: field.label),
               ),
             if (error case final message?) Text(message),
+            if (widget.recover != null)
+              TextButton(
+                onPressed: saving || recoverySent ? null : sendRecovery,
+                child: const Text('Forgot Current Password?'),
+              ),
+            if (recoverySent)
+              const Text(
+                'Check your registered email for the verification link to reset your password.',
+              ),
           ],
         ),
       ),

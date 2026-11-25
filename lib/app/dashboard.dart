@@ -267,11 +267,19 @@ class _Home extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Mill operations',
-                  style: theme.textTheme.headlineLarge?.copyWith(
-                    color: softCream,
-                  ),
+                Row(
+                  children: [
+                    const Icon(Icons.factory_outlined, color: softCream),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Machine Operations',
+                        style: theme.textTheme.headlineLarge?.copyWith(
+                          color: softCream,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 7),
                 Text(

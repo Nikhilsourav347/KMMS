@@ -5,6 +5,11 @@ class MillError implements Exception {
   final String message;
 }
 
+class EmailVerificationRequired extends MillError {
+  const EmailVerificationRequired()
+    : super('Verify your email address before signing in.');
+}
+
 class AccountSetup {
   const AccountSetup(this.name, this.email, this.password);
   final String name;
@@ -25,7 +30,7 @@ abstract interface class MillAuth {
   Future<RowData> profile();
   Future<void> editProfile(String name, String email, String phone);
   Future<void> changePassword(String currentPassword, String newPassword);
-  Future<void> addAccount(
+  Future<bool> addAccount(
     StaffRole role,
     AccountSetup account, {
     String phone = '',
@@ -33,6 +38,7 @@ abstract interface class MillAuth {
   Future<List<RowData>> managers();
   Future<void> setManagerEnabled(String email, bool enabled);
   Future<void> requestRecovery(String email);
+  Future<void> requestEmailVerification(String email);
   Future<void> recoverWithCode(String email, String code, String password);
   Future<void> completeRecovery(String newPassword);
 }

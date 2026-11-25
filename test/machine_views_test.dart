@@ -13,6 +13,7 @@ import 'package:ukm/features/program_schedule/schedule.dart';
 class _MachineAuth implements MillAuth {
   _MachineAuth(this.role);
   final StaffRole role;
+  String? recoveredEmail;
 
   @override
   Future<RowData> profile() async => {
@@ -23,6 +24,11 @@ class _MachineAuth implements MillAuth {
 
   @override
   Future<List<RowData>> managers() async => [];
+
+  @override
+  Future<void> requestRecovery(String email) async {
+    recoveredEmail = email;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -117,6 +123,25 @@ Future<void> _show(
 }
 
 void main() {
+  for (final role in StaffRole.values) {
+    testWidgets('${role.label} can request recovery from Change password', (
+      tester,
+    ) async {
+      final repository = _MachineData(role, machines: 0);
+      await _show(tester, repository, ProfileScreen(logout: () async {}));
+      final change = find.text('Change password');
+      await tester.ensureVisible(change);
+      await tester.tap(change);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Forgot Current Password?'));
+      await tester.pumpAndSettle();
+      expect(repository.auth.recoveredEmail, 'fixture@example.invalid');
+      expect(
+        find.textContaining('Check your registered email'),
+        findsOneWidget,
+      );
+    });
+  }
   testWidgets('running switches sit in two columns and show the assigned DIA', (
     tester,
   ) async {
