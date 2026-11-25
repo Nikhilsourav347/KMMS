@@ -52,6 +52,8 @@ Future<List<RowData>> _all<K>(
   DatabaseClient client,
 ) async => (await store.find(client)).map((record) => record.value).toList();
 
+typedef MachineScheduleRow = ({RowData machine, Set<String> bookedDates});
+
 class MillRepository {
   MillRepository(this.db, this.auth, {DateTime Function()? clock})
     : clock = clock ?? DateTime.now;
@@ -107,13 +109,18 @@ class MillRepository {
   Future<void> saveMachine({
     int? id,
     required String number,
-    required String type,
+    required int dia,
+    String type = '',
     String specifications = '',
   }) => _write((txn) async {
     final label = _required(number, 'a machine number', 40);
-    final machineType = _required(type, 'a machine type', 80);
-    if (specifications.trim().length > 360) {
-      throw const MillError('Use up to 360 characters for specifications.');
+    if (dia < 1 || dia > 999) {
+      throw const MillError('Enter a DIA from 1 to 999.');
+    }
+    if (type.trim().length > 80 || specifications.trim().length > 360) {
+      throw const MillError(
+        'Use up to 80 characters for type and 360 for specifications.',
+      );
     }
     final name = RegExp(r'^\d+$').hasMatch(label)
         ? 'Machine ${label.padLeft(2, '0')}'
@@ -143,7 +150,8 @@ class MillRepository {
       'id': nextId,
       'name': name,
       'number': label,
-      'type': machineType,
+      'dia': dia,
+      'type': type.trim(),
       'specifications': specifications.trim(),
     };
     await record.put(txn, next);
@@ -218,20 +226,50 @@ class MillRepository {
       _date(row['end_date']).compareTo(date) >= 0;
 
   Future<List<RowData>> scheduleDay(DateTime date) async {
-    await auth.authorize(db);
     final day = isoDate(date);
+    final entries = await machineSchedule(date, date);
+    return [
+      for (final entry in entries)
+        {...entry.machine, 'scheduled': entry.bookedDates.contains(day)},
+    ];
+  }
+
+  Future<List<MachineScheduleRow>> machineSchedule(
+    DateTime first,
+    DateTime last,
+  ) async {
     return db.transaction((txn) async {
+      await auth.authorize(txn);
       final bookings = await _all(_schedules, txn);
+      final dates = [
+        for (
+          var date = plainDate(first);
+          !date.isAfter(last);
+          date = DateTime(date.year, date.month, date.day + 1)
+        )
+          isoDate(date),
+      ];
+      final byMachine = <int, List<RowData>>{};
+      for (final booking in bookings) {
+        if (booking['machine_id'] case final int id) {
+          (byMachine[id] ??= []).add(booking);
+        }
+      }
       return [
         for (final machine in await _all(_machines, txn))
           if (machine['removed_at'] == null)
-            {
-              ...machine,
-              'scheduled': bookings.any(
-                (row) => _isBooked(row, machine['id'], day),
-              ),
-            },
-      ]..sort((a, b) => _byText(a, b, 'name'));
+            (
+              machine: machine,
+              bookedDates: {
+                for (final date in dates)
+                  if (byMachine[machine['id']]?.any(
+                        (row) => _isBooked(row, machine['id'], date),
+                      ) ??
+                      false)
+                    date,
+              },
+            ),
+      ]..sort((a, b) => _byText(a.machine, b.machine, 'name'));
     });
   }
 
@@ -254,6 +292,49 @@ class MillRepository {
     };
     await _schedules.record(key).put(txn, booking);
     await _recordAudit(txn, 'schedules', 'insert', null, booking);
+  });
+
+  Future<void> cancelMachineSchedule(int id, DateTime date) => _write((
+    txn,
+  ) async {
+    final machine = await _machines.record(id).get(txn);
+    if (machine == null || machine['removed_at'] != null) {
+      throw const MillError('Machine is unavailable.');
+    }
+    final day = isoDate(date);
+    final bookings = (await _schedules.find(
+      txn,
+    )).where((entry) => _isBooked(entry.value, id, day));
+    if (bookings.isEmpty) {
+      throw const MillError('This machine is already available on that date.');
+    }
+    for (final entry in bookings) {
+      final original = entry.value;
+      await entry.ref.delete(txn);
+      await _recordAudit(txn, 'schedules', 'cancel_day', original, {
+        'machine_id': id,
+        'date': day,
+      });
+      final before = isoDate(DateTime(date.year, date.month, date.day - 1));
+      final after = isoDate(DateTime(date.year, date.month, date.day + 1));
+      for (final (start, end) in [
+        if (_date(original['start_date']).compareTo(day) < 0)
+          (_date(original['start_date']), before),
+        if (_date(original['end_date']).compareTo(day) > 0)
+          (after, _date(original['end_date'])),
+      ]) {
+        final key = _uniqueId();
+        final replacement = {
+          ...original,
+          'id': key,
+          'start_date': start,
+          'end_date': end,
+          'updated_at': _now,
+        };
+        await _schedules.record(key).put(txn, replacement);
+        await _recordAudit(txn, 'schedules', 'retain_range', null, replacement);
+      }
+    }
   });
 
   void _checkDia(int? dia) {

@@ -77,80 +77,92 @@ class _DayState extends ConsumerState<MachineScreen> {
               if (machines.isEmpty)
                 const Notice('No registered machines.')
               else
-                Panel(
-                  padding: const EdgeInsets.all(12),
-                  child: Table(
-                    columnWidths: const {
-                      0: FlexColumnWidth(1),
-                      1: FlexColumnWidth(.85),
-                      2: FlexColumnWidth(.95),
-                    },
-                    defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-                    border: TableBorder(
-                      horizontalInside: BorderSide(
-                        color: Theme.of(context).dividerColor,
-                      ),
-                    ),
-                    children: [
-                      const TableRow(
-                        children: [
-                          Padding(
-                            padding: EdgeInsets.all(6),
-                            child: Text('Machine'),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.all(6),
-                            child: Text('Date'),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.all(6),
-                            child: Text('Status'),
-                          ),
-                        ],
-                      ),
-                      for (final machine in machines)
-                        TableRow(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 12,
-                              ),
-                              child: Text(machine['name']),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    const gap = 10.0;
+                    final width = (constraints.maxWidth - gap) / 2;
+                    return Wrap(
+                      spacing: gap,
+                      runSpacing: gap,
+                      children: [
+                        for (final machine in machines)
+                          SizedBox(
+                            key: ValueKey('machine-card-${machine['id']}'),
+                            width: width,
+                            child: _MachineCard(
+                              machine: machine,
+                              running:
+                                  pending[machine['id']] ??
+                                  machine['running'] == true,
+                              onChanged:
+                                  manager && !pending.containsKey(machine['id'])
+                                  ? (value) => update(machine, value)
+                                  : null,
                             ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                              ),
-                              child: Text(prettyDate(date)),
-                            ),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Semantics(
-                                label: '${machine['name']} running',
-                                child: CupertinoSwitch(
-                                  value:
-                                      pending[machine['id']] ??
-                                      machine['running'] == true,
-                                  activeTrackColor: runningGreen,
-                                  inactiveTrackColor: unconfirmedGrey,
-                                  onChanged:
-                                      manager &&
-                                          !pending.containsKey(machine['id'])
-                                      ? (value) => update(machine, value)
-                                      : null,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
+                          ),
+                      ],
+                    );
+                  },
                 ),
             ],
           );
         }, () => ref.invalidate(_dayProvider(date))),
       ],
+    );
+  }
+}
+
+class _MachineCard extends StatelessWidget {
+  const _MachineCard({
+    required this.machine,
+    required this.running,
+    required this.onChanged,
+  });
+  final RowData machine;
+  final bool running;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Panel(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            machine['name'] as String,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleMedium,
+          ),
+          Text(machineDiaLabel(machine), style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Flexible(
+                child: Text(
+                  running ? 'ON' : 'OFF',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: running ? runningGreen : unconfirmedGrey,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Semantics(
+                label: '${machine['name']} running',
+                child: CupertinoSwitch(
+                  value: running,
+                  activeTrackColor: runningGreen,
+                  inactiveTrackColor: unconfirmedGrey,
+                  onChanged: onChanged,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

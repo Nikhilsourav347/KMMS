@@ -59,17 +59,23 @@ void main() {
         ),
       );
       for (var id = 1; id <= 10; id++) {
-        await store.saveMachine(number: '$id', type: 'Circular');
+        await store.saveMachine(number: '$id', dia: 26, type: 'Circular');
       }
       await store.saveMachine(
         id: 1,
         number: '1',
+        dia: 28,
         type: 'Circular rib',
         specifications: '28 DIA',
       );
       expect((await store.registeredMachines()).first['type'], 'Circular rib');
+      expect((await store.registeredMachines()).first['dia'], 28);
       await expectLater(
-        store.saveMachine(number: '01', type: 'Circular'),
+        store.saveMachine(number: '01', dia: 28),
+        throwsA(isA<MillError>()),
+      );
+      await expectLater(
+        store.saveMachine(number: '11', dia: 0),
         throwsA(isA<MillError>()),
       );
 
@@ -103,7 +109,7 @@ void main() {
       final day = DateTime(2026, 11, 25);
       expect((await store.registeredMachines()).length, 10);
       await expectLater(
-        store.saveMachine(number: '11', type: 'Circular'),
+        store.saveMachine(number: '11', dia: 32),
         throwsA(isA<MillError>()),
       );
       await expectLater(auth.managers(), throwsA(isA<MillError>()));
@@ -138,6 +144,24 @@ void main() {
         throwsA(isA<MillError>()),
       );
       expect((await store.scheduleDay(day)).first['scheduled'], isTrue);
+      await store.cancelMachineSchedule(1, day);
+      expect((await store.scheduleDay(day)).first['scheduled'], isFalse);
+      expect((await store.machineDay(day)).first['running'], isTrue);
+      final tomorrow = DateTime(2026, 11, 26);
+      final activeRange = stringMapStoreFactory.store('schedules');
+      await activeRange.record('legacy-range').put(database, {
+        'id': 'legacy-range',
+        'machine_id': 1,
+        'start_date': '2026-11-24',
+        'end_date': '2026-11-26',
+      });
+      await store.cancelMachineSchedule(1, day);
+      final calendar = await store.machineSchedule(
+        DateTime(2026, 11, 24),
+        tomorrow,
+      );
+      expect(calendar.first.bookedDates, {'2026-11-24', '2026-11-26'});
+      await store.scheduleMachine(1, day);
       await store.setRunning(1, day, false);
       expect((await store.machineDay(day)).first['running'], isFalse);
       expect((await store.scheduleDay(day)).first['scheduled'], isTrue);
@@ -223,6 +247,10 @@ void main() {
         'Fixture admin secret',
       );
       expect(admin.role, StaffRole.admin);
+      await expectLater(
+        store.cancelMachineSchedule(1, day),
+        throwsA(isA<MillError>()),
+      );
       await expectLater(
         store.setRunning(1, day, false),
         throwsA(isA<MillError>()),

@@ -81,18 +81,27 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
         label: 'Machine number',
         value: (machine?['number'] ?? machine?['name'] ?? '') as String,
       ),
-      (label: 'Machine type', value: machine?['type'] as String? ?? ''),
+      (label: 'DIA', value: machine?['dia']?.toString() ?? ''),
+      (
+        label: 'Machine type (optional)',
+        value: machine?['type'] as String? ?? '',
+      ),
       (
         label: 'Specifications (optional)',
         value: machine?['specifications'] as String? ?? '',
       ),
     ],
     (values) async {
+      final dia = int.tryParse(values[1].trim());
+      if (dia == null || dia < 1 || dia > 999) {
+        throw const MillError('Enter a whole-number DIA from 1 to 999.');
+      }
       await repository.saveMachine(
         id: machine?['id'],
         number: values[0],
-        type: values[1],
-        specifications: values[2],
+        dia: dia,
+        type: values[2],
+        specifications: values[3],
       );
       if (mounted) ref.invalidate(_profileMachines);
     },
@@ -150,189 +159,203 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
           final admin = row['role'] == StaffRole.admin.name;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            spacing: 16,
+            spacing: 14,
             children: [
-              Panel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      row['full_name'],
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const Text(companyName),
-                    Text('Mill ID · ${row['mill_id']}'),
-                    Text('Email · ${row['email']}'),
-                    Text('Phone · ${cellText(row['phone'])}'),
-                    Text(
-                      'Role · ${StaffRole.values.byName(row['role']).label}',
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        OutlinedButton(
-                          onPressed: () => _form(
-                            'Edit profile',
-                            [
-                              (
-                                label: 'Name',
-                                value: row['full_name'] as String,
-                              ),
-                              (
-                                label: 'Email address',
-                                value: row['email'] as String,
-                              ),
-                              (
-                                label: 'Phone number',
-                                value: row['phone'] as String,
-                              ),
-                            ],
-                            (v) =>
-                                repository.auth.editProfile(v[0], v[1], v[2]),
-                          ),
-                          child: const Text('Edit profile'),
-                        ),
-                        OutlinedButton(
-                          onPressed: () => _form(
-                            'Change password',
-                            [
-                              (label: 'Current password', value: ''),
-                              (label: 'New password', value: ''),
-                            ],
-                            (v) => repository.auth.changePassword(v[0], v[1]),
-                          ),
-                          child: const Text('Change password'),
-                        ),
-                        OutlinedButton(
-                          onPressed: widget.logout,
-                          child: const Text('Logout'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (admin) ...[
-                Panel(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+              LayoutBuilder(
+                builder: (context, sizes) {
+                  const gap = 14.0;
+                  final width = sizes.maxWidth < 640
+                      ? sizes.maxWidth
+                      : (sizes.maxWidth - gap) / 2;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
                     children: [
-                      Text(
-                        'Staff accounts',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          TextButton(
-                            onPressed: () => addAccount(StaffRole.admin),
-                            child: const Text('Add Admin'),
-                          ),
-                          TextButton(
-                            onPressed: () => addAccount(StaffRole.manager),
-                            child: const Text('Add Manager'),
-                          ),
-                          TextButton(
-                            onPressed: () => setState(
-                              () => managers = repository.auth.managers(),
-                            ),
-                            child: const Text('Manage Manager Accounts'),
-                          ),
-                        ],
-                      ),
-                      if (managers != null)
-                        FutureBuilder<List<RowData>>(
-                          future: managers,
-                          builder: (context, snapshot) {
-                            if (snapshot.hasError) {
-                              return Text(friendlyError(snapshot.error!));
-                            }
-                            if (!snapshot.hasData) {
-                              return const LinearProgressIndicator();
-                            }
-                            if (snapshot.data!.isEmpty) {
-                              return const Text('No manager accounts yet.');
-                            }
-                            return Column(
-                              children: [
-                                for (final manager in snapshot.data!)
-                                  ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: Text(manager['full_name']),
-                                    subtitle: Text(manager['email']),
-                                    trailing: TextButton(
-                                      onPressed: () => toggleManager(manager),
-                                      child: Text(
-                                        manager['disabled'] == true
-                                            ? 'Enable'
-                                            : 'Disable',
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            );
-                          },
-                        ),
+                      SizedBox(width: width, child: _identity(row)),
+                      SizedBox(width: width, child: _account(row)),
+                      if (admin) SizedBox(width: width, child: _staff()),
                     ],
-                  ),
-                ),
+                  );
+                },
+              ),
+              if (admin)
                 loadView(
                   ref.watch(_profileMachines),
-                  (machines) => Panel(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'Registered machines · ${machines.length}',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: editMachine,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Add Machine'),
-                          ),
-                        ),
-                        for (final machine in machines)
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(machine['name']),
-                            subtitle: Text(
-                              [machine['type'], machine['specifications']]
-                                  .whereType<String>()
-                                  .where((v) => v.isNotEmpty)
-                                  .join(' · '),
-                            ),
-                            trailing: Wrap(
-                              children: [
-                                IconButton(
-                                  tooltip: 'Edit Machine',
-                                  onPressed: () => editMachine(machine),
-                                  icon: const Icon(Icons.edit_outlined),
-                                ),
-                                IconButton(
-                                  tooltip: 'Delete Machine',
-                                  onPressed: () => removeMachine(machine),
-                                  icon: const Icon(Icons.delete_outline),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+                  _machineRegister,
                   () => ref.invalidate(_profileMachines),
                 ),
-              ],
             ],
           );
         },
       ),
     ],
+  );
+
+  Widget _identity(RowData row) => _block('Profile details', [
+    Text(
+      row['full_name'] as String,
+      style: Theme.of(context).textTheme.titleMedium,
+    ),
+    const Text(companyName),
+    Text('Mill ID · ${row['mill_id']}'),
+    Text('Email · ${row['email']}'),
+    Text('Phone · ${cellText(row['phone'])}'),
+    Text('Role · ${StaffRole.values.byName(row['role']).label}'),
+  ]);
+
+  Widget _account(RowData row) => _block('Account settings', [
+    Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton(
+          onPressed: () => _form('Edit profile', [
+            (label: 'Name', value: row['full_name'] as String),
+            (label: 'Email address', value: row['email'] as String),
+            (label: 'Phone number', value: row['phone'] as String),
+          ], (v) => repository.auth.editProfile(v[0], v[1], v[2])),
+          child: const Text('Edit profile'),
+        ),
+        OutlinedButton(
+          onPressed: () => _form('Change password', [
+            (label: 'Current password', value: ''),
+            (label: 'New password', value: ''),
+          ], (v) => repository.auth.changePassword(v[0], v[1])),
+          child: const Text('Change password'),
+        ),
+        OutlinedButton(onPressed: widget.logout, child: const Text('Logout')),
+      ],
+    ),
+  ]);
+
+  Widget _staff() => _block('Staff accounts', [
+    Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        TextButton(
+          onPressed: () => addAccount(StaffRole.admin),
+          child: const Text('Add Admin'),
+        ),
+        TextButton(
+          onPressed: () => addAccount(StaffRole.manager),
+          child: const Text('Add Manager'),
+        ),
+        TextButton(
+          onPressed: () =>
+              setState(() => managers = repository.auth.managers()),
+          child: const Text('Manage Manager Accounts'),
+        ),
+      ],
+    ),
+    if (managers != null)
+      FutureBuilder<List<RowData>>(
+        future: managers,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return Text(friendlyError(snapshot.error!));
+          if (!snapshot.hasData) return const LinearProgressIndicator();
+          if (snapshot.data!.isEmpty) {
+            return const Text('No manager accounts yet.');
+          }
+          return Column(
+            children: [
+              for (final manager in snapshot.data!)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(manager['full_name'] as String),
+                  subtitle: Text(manager['email'] as String),
+                  trailing: TextButton(
+                    onPressed: () => toggleManager(manager),
+                    child: Text(
+                      manager['disabled'] == true ? 'Enable' : 'Disable',
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+  ]);
+
+  Widget _machineRegister(List<RowData> machines) =>
+      _block('Registered machines · ${machines.length}', [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: editMachine,
+            icon: const Icon(Icons.add),
+            label: const Text('Add Machine'),
+          ),
+        ),
+        if (machines.isEmpty)
+          const Text('No registered machines.')
+        else
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              horizontalMargin: 8,
+              columnSpacing: 18,
+              dataRowMaxHeight: 84,
+              columns: const [
+                DataColumn(label: Text('Machine number')),
+                DataColumn(label: Text('DIA')),
+                DataColumn(label: Text('Type')),
+                DataColumn(label: Text('Specifications')),
+                DataColumn(label: Text('Actions')),
+              ],
+              rows: [
+                for (final machine in machines)
+                  DataRow(
+                    cells: [
+                      DataCell(
+                        Text((machine['number'] ?? machine['name']) as String),
+                      ),
+                      DataCell(Text(machine['dia']?.toString() ?? 'Not set')),
+                      DataCell(Text(cellText(machine['type']))),
+                      DataCell(
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 240),
+                          child: Text(
+                            cellText(machine['specifications']),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Edit ${machine['name']}',
+                              onPressed: () => editMachine(machine),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Remove ${machine['name']}',
+                              onPressed: () => removeMachine(machine),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+      ]);
+
+  Widget _block(String title, List<Widget> children) => Panel(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 5,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 4),
+        ...children,
+      ],
+    ),
   );
 }
 
@@ -403,6 +426,9 @@ class _EditState extends State<_EditDialog> {
               TextField(
                 controller: inputs[index],
                 enabled: !saving,
+                keyboardType: field.label == 'DIA'
+                    ? TextInputType.number
+                    : null,
                 obscureText: field.label.toLowerCase().contains('password'),
                 decoration: InputDecoration(labelText: field.label),
               ),

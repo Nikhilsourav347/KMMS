@@ -15,6 +15,11 @@ const designs = [
 ];
 typedef RowData = Map<String, dynamic>;
 
+String machineDiaLabel(RowData machine) {
+  final dia = machine['dia'];
+  return dia == null ? 'DIA not set' : 'DIA $dia';
+}
+
 enum StaffRole {
   admin('Admin'),
   manager('Manager');

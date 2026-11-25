@@ -7,8 +7,8 @@ This Flutter app is in local testing mode. It stores data in an app-private data
 Open the [GitHub Pages test site](https://nikhilsourav347.github.io/KMMS/) in Safari or Chrome. Use test accounts and records. Each browser profile stores its own data on this site.
 
 1. Complete onboarding and create the first local Admin account. Save its recovery key.
-2. Sign in with **Admin Login**. In **Profile**, add staff accounts and register machines. Save and privately share each new staff member’s recovery key.
-3. Sign out and use **Manager Login** to enter daily machine status, schedule machines and record jobs and production. Day and Night are the production shifts. A night entry uses the date its shift starts.
+2. Sign in with **Admin Login**. In **Profile**, add staff accounts and register each machine with its machine number and DIA. Machine type and other specifications are optional. Save and privately share each new staff member’s recovery key.
+3. Sign out and use **Manager Login**. Use the ON/OFF cards for daily machine status and the monthly calendar to confirm a booking or make a scheduled machine available again. Day and Night are the production shifts. A night entry uses the date its shift starts.
 4. Open **Reports** to inspect results. Job-wise and Day-wise PDFs show the relevant order details, total ordered quantity and balance. The Day-wise PDF calculates the balance through the selected date.
 5. Use the system back button or the page’s back arrow to return to the dashboard. The web build uses hash routes, so refreshing an internal URL starts at the local login if there is no active session.
 
