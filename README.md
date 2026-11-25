@@ -4,6 +4,8 @@ This Flutter app is in local testing mode. It stores data in an app-private data
 
 ## Getting started
 
+Open the [GitHub Pages test site](https://nikhilsourav347.github.io/KMMS/) in Safari or Chrome. Use test accounts and records. Each browser profile stores its own data on this site.
+
 1. Complete onboarding and create the first local Admin account. Save its recovery key.
 2. Sign in with **Admin Login**. In **Profile**, add staff accounts and register machines. Save and privately share each new staff member’s recovery key.
 3. Sign out and use **Manager Login** to enter daily machine status, schedule machines and record jobs and production. Day and Night are the production shifts. A night entry uses the date its shift starts.
@@ -27,7 +29,9 @@ flutter build apk --release --target-platform android-arm64
 flutter build web --release --base-href /KMMS/
 ```
 
-For Android distribution, unset `UKM_TEST_SIGNING` and configure the company signing key using `android/key.properties.example`. The current web build uses the future GitHub Pages base path. For hosting at the root of a local server, use `--base-href /`. To test on iPhone Safari, serve the web build over HTTPS. Browser storage is specific to that origin.
+For Android distribution, unset `UKM_TEST_SIGNING` and configure the company signing key using `android/key.properties.example`. For hosting the web build at the root of a local server, use `--base-href /`.
+
+GitHub Actions builds and deploys the site on pushes to `main`. Run **Deploy Flutter to GitHub Pages** from the Actions tab to redeploy manually.
 
 ## Project layout
 

@@ -1,0 +1,70 @@
+name: Deploy Flutter to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Install Flutter 3.38.6
+        env:
+          FLUTTER_ARCHIVE: flutter_linux_3.38.6-stable.tar.xz
+          FLUTTER_SHA256: a70e3b829f53acd013aae65995755db0f421457b5ab754afa5a344cd5ec4d8d5
+        run: |
+          archive="$RUNNER_TEMP/$FLUTTER_ARCHIVE"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/$FLUTTER_ARCHIVE" \
+            --output "$archive"
+          printf '%s  %s\n' "$FLUTTER_SHA256" "$archive" | sha256sum --check --status
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Build and verify the web bundle
+        env:
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          base_href="${PAGES_BASE_PATH%/}/"
+          flutter pub get --enforce-lockfile
+          flutter build web --release --base-href "$base_href" --pwa-strategy=none --no-wasm-dry-run --no-pub
+          test -s build/web/flutter_bootstrap.js
+          test -s build/web/main.dart.js
+          test -s build/web/canvaskit/canvaskit.wasm
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
