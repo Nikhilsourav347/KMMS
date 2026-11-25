@@ -685,6 +685,7 @@ class MillRepository {
           continue;
         }
         final labels = {
+          'job_id': job['id'],
           'job_number': job['job_number'],
           'job_date': job['job_date'],
           'party': snapshot.partyName(job),

@@ -224,6 +224,13 @@ class _ProgramDraft {
       remarks = TextEditingController(text: row?['remarks']),
       hasHistory = row?['has_history'] == true;
 
+  static const custom = 'Others';
+  late String? design = spec.text.isEmpty
+      ? null
+      : designs.contains(spec.text)
+      ? spec.text
+      : custom;
+
   final String? id;
   int? dia;
   final bool hasHistory;
@@ -232,12 +239,14 @@ class _ProgramDraft {
   bool get empty =>
       id == null &&
       dia == null &&
+      design == null &&
       [loop, order, spec, remarks].every((field) => field.text.trim().isEmpty);
   bool get complete =>
       dia != null &&
       (parseGrams(loop.text) ?? 0) > 0 &&
       (parseGrams(order.text) ?? 0) > 0 &&
-      spec.text.trim().isNotEmpty;
+      spec.text.trim().isNotEmpty &&
+      (hasHistory || spec.text.trim().toLowerCase() != custom.toLowerCase());
 
   RowData get data => {
     'id': id,
@@ -580,13 +589,10 @@ class _JobEditorState extends ConsumerState<_JobEditor> {
           const SizedBox(height: 9),
           DropdownButtonFormField<String>(
             isExpanded: true,
-            initialValue: p.spec.text.isEmpty ? null : p.spec.text,
+            initialValue: p.design,
             decoration: const InputDecoration(labelText: 'Design'),
             items: [
-              for (final design in {
-                ...designs,
-                if (p.spec.text.isNotEmpty) p.spec.text,
-              })
+              for (final design in [...designs, _ProgramDraft.custom])
                 DropdownMenuItem(
                   value: design,
                   child: Text(design, overflow: TextOverflow.ellipsis),
@@ -594,8 +600,31 @@ class _JobEditorState extends ConsumerState<_JobEditor> {
             ],
             onChanged: busy || hasOutput
                 ? null
-                : (value) => setState(() => p.spec.text = value ?? ''),
+                : (value) => setState(() {
+                    if (p.design != value) {
+                      p.design = value;
+                      p.spec.text = value == _ProgramDraft.custom
+                          ? ''
+                          : value ?? '';
+                    }
+                  }),
           ),
+          if (p.design == _ProgramDraft.custom) ...[
+            const SizedBox(height: 9),
+            TextFormField(
+              controller: p.spec,
+              enabled: !busy && !hasOutput,
+              maxLength: 120,
+              decoration: const InputDecoration(labelText: 'Enter Design Name'),
+              validator: (value) {
+                final name = value?.trim() ?? '';
+                return !hasOutput &&
+                        (name.isEmpty || name.toLowerCase() == 'others')
+                    ? 'Enter the custom design name.'
+                    : null;
+              },
+            ),
+          ],
           const SizedBox(height: 9),
           TextField(
             controller: p.remarks,

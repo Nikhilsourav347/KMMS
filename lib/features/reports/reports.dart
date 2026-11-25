@@ -160,9 +160,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 loadView(
                   jobs,
                   (results) => SearchPicker(
-                    label: kind == ReportKind.job
-                        ? 'Select job number'
-                        : 'Filter by job (optional)',
+                    label: 'Select job number',
                     value: jobId,
                     options: {
                       for (final j in results)
@@ -221,7 +219,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   icon: const Icon(Icons.bar_chart),
                   label: const Text('Generate report'),
                   onPressed:
-                      (kind == ReportKind.job && pickedJob == null) ||
+                      (usesJobs && pickedJob == null) ||
                           (jobId != null && pickedJob == null) ||
                           (partyId != null && pickedParty == null) ||
                           snapshot?.isLoading == true

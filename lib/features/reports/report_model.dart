@@ -51,7 +51,7 @@ class ReportRequest {
       ReportKind.shift =>
         'UKM_${shift!.label}_Shift_Report_${isoDate(start!)}.pdf',
       ReportKind.range =>
-        'UKM_Production_${isoDate(start!)}_to_${isoDate(end!)}.pdf',
+        'UKM_Job_${safe(jobNumber!)}_${isoDate(start!)}_to_${isoDate(end!)}.pdf',
     };
   }
 }
@@ -75,6 +75,34 @@ class ReportData {
   int get produced => sumPrograms('produced_kg');
   int get balance => sumPrograms('balance_kg');
   int get period => sumPrograms('period_kg');
+  List<RowData> get filteredEntries {
+    final start = request.start == null ? null : isoDate(request.start!);
+    final end = request.end == null ? null : isoDate(request.end!);
+    return entries.where((row) {
+      final date = row['production_date'] as String;
+      final matchesJob = request.jobId != null && row['job_id'] != null
+          ? row['job_id'] == request.jobId
+          : request.jobNumber == null || row['job_number'] == request.jobNumber;
+      return (start == null || date.compareTo(start) >= 0) &&
+          (end == null || date.compareTo(end) <= 0) &&
+          (request.shift == null || row['shift'] == request.shift!.name) &&
+          matchesJob;
+    }).toList();
+  }
+
+  Map<String, int> get dailyProduction {
+    final totals = <String, int>{};
+    for (final entry in filteredEntries) {
+      final date = entry['production_date'] as String;
+      totals.update(
+        date,
+        (sum) => sum + grams(entry['quantity_kg']),
+        ifAbsent: () => grams(entry['quantity_kg']),
+      );
+    }
+    return totals;
+  }
+
   Map<int, (int, int)> get byDia {
     final totals = <int, (int, int)>{};
     for (final row in entries) {

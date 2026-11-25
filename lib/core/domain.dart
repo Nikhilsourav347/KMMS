@@ -2,7 +2,7 @@ import 'package:intl/intl.dart';
 
 const companyName = 'Unique Knitting Mills';
 const logoAsset = 'assets/images/company_logo.jpg';
-const dias = [26, 28, 30, 32, 34];
+const dias = [24, 26, 28, 30, 32, 34];
 const designs = [
   'Single Jersey',
   'Loop Knit',

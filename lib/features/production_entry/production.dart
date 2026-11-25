@@ -48,6 +48,7 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
   bool get wantKeepAlive => true;
 
   void _read() {
+    _sheetKey = GlobalKey<_SheetState>();
     final id = jobId;
     details = id == null || date == null || shift == null
         ? null
@@ -99,7 +100,7 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
     });
   }
 
-  final _sheetKey = GlobalKey<_SheetState>();
+  var _sheetKey = GlobalKey<_SheetState>();
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -133,7 +134,7 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
                     last: indiaToday(),
                   ),
                   SegmentedButton<Shift>(
-                    emptySelectionAllowed: true,
+                    emptySelectionAllowed: shift == null,
                     segments: const [
                       ButtonSegment(value: Shift.morning, label: Text('Day')),
                       ButtonSegment(value: Shift.night, label: Text('Night')),
@@ -143,7 +144,6 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
                         ? null
                         : (value) => _changeFilters(() {
                             shift = value.firstOrNull;
-                            jobId = null;
                           }),
                   ),
                 ],
@@ -198,6 +198,7 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
                 key: _sheetKey,
                 job: job,
                 programs: rows(result['programs']),
+                shift: shift!,
                 busy: busy,
                 onSave: save,
                 refresh: () => _changeFilters(() {}),
@@ -214,12 +215,14 @@ class _Sheet extends StatefulWidget {
     super.key,
     required this.job,
     required this.programs,
+    required this.shift,
     required this.busy,
     required this.onSave,
     required this.refresh,
   });
   final RowData job;
   final List<RowData> programs;
+  final Shift shift;
   final bool busy;
   final Future<bool> Function(List<RowData>) onSave;
   final VoidCallback refresh;
@@ -230,7 +233,6 @@ class _Sheet extends StatefulWidget {
 class _SheetState extends State<_Sheet> {
   final form = GlobalKey<FormState>();
   final fields = <String, TextEditingController>{};
-  int? selectedDia;
   bool get changed => widget.programs.any((p) {
     final original = p['shift_kg'];
     final entry = fields[p['id']]?.text.trim() ?? '';
@@ -242,7 +244,6 @@ class _SheetState extends State<_Sheet> {
   @override
   void initState() {
     super.initState();
-    selectedDia = widget.programs.firstOrNull?['dia'];
     for (final p in widget.programs) {
       fields[p['id']] = TextEditingController(
         text: p['shift_kg'] == null ? '' : kg(grams(p['shift_kg'])),
@@ -314,46 +315,34 @@ class _SheetState extends State<_Sheet> {
           ),
         ),
         const SizedBox(height: 14),
-        if (widget.programs.isNotEmpty)
-          DropdownButtonFormField<int>(
-            initialValue: selectedDia,
-            decoration: const InputDecoration(labelText: 'DIA'),
-            items: [
-              for (final dia
-                  in widget.programs.map((p) => p['dia'] as int).toSet())
-                DropdownMenuItem(value: dia, child: Text('DIA $dia')),
-            ],
-            onChanged: widget.busy
-                ? null
-                : (value) => setState(() => selectedDia = value),
-          ),
-        const SizedBox(height: 12),
-        if (selectedDia case final dia?)
-          if (widget.programs.any((p) => p['dia'] == dia))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Panel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'DIA $dia',
-                      style: Theme.of(context).textTheme.titleLarge,
+        for (final dia
+            in (widget.programs.map((p) => p['dia'] as int).toSet().toList()
+              ..sort()))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Panel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'DIA $dia',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  for (final p in widget.programs.where(
+                    (p) => p['dia'] == dia,
+                  )) ...[
+                    const Divider(height: 26),
+                    _ProductionLine(
+                      program: p,
+                      field: fields[p['id']]!,
+                      shift: widget.shift,
+                      enabled: !widget.busy,
                     ),
-                    for (final p in widget.programs.where(
-                      (p) => p['dia'] == dia,
-                    )) ...[
-                      const Divider(height: 26),
-                      _ProductionLine(
-                        program: p,
-                        field: fields[p['id']]!,
-                        enabled: !widget.busy,
-                      ),
-                    ],
                   ],
-                ),
+                ],
               ),
             ),
+          ),
         Align(
           alignment: Alignment.centerRight,
           child: FilledButton.icon(
@@ -371,10 +360,12 @@ class _ProductionLine extends StatelessWidget {
   const _ProductionLine({
     required this.program,
     required this.field,
+    required this.shift,
     required this.enabled,
   });
   final RowData program;
   final TextEditingController field;
+  final Shift shift;
   final bool enabled;
   @override
   Widget build(BuildContext context) {
@@ -438,7 +429,7 @@ class _ProductionLine extends StatelessWidget {
             enabled: enabled,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: 'Current shift production (kg)',
+              labelText: '${shift.label} Shift Production (KG)',
               helperText: program['shift_version'] == null
                   ? null
                   : 'Saved entry · edit to correct',

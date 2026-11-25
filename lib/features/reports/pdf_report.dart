@@ -11,9 +11,7 @@ const _ink = PdfColor.fromInt(0xFF202731);
 const _line = PdfColor.fromInt(0xFFDBD1BF);
 
 PdfPageFormat reportFormat(ReportKind kind) =>
-    kind == ReportKind.job || kind == ReportKind.daily
-    ? PdfPageFormat.a4
-    : PdfPageFormat.a4.landscape;
+    kind != ReportKind.shift ? PdfPageFormat.a4 : PdfPageFormat.a4.landscape;
 
 Future<Uint8List> buildReportPdf(ReportData report) async {
   final image = await rootBundle.load(logoAsset);
@@ -30,16 +28,6 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
     subject: report.reference,
     theme: pw.ThemeData.withFont(base: body, bold: bold),
   );
-  final job = report.request.kind == ReportKind.job;
-  final daily = report.request.kind == ReportKind.daily;
-  final compact = job || daily;
-  final jobMeta = report.programs.firstOrNull;
-  final summary = job
-      ? _jobRows(report.programs)
-      : daily
-      ? _dayRows(report.programs)
-      : <_OrderRow>[];
-  final summaryBalance = summary.fold(0, (sum, row) => sum + row.balance);
   final tableText = pw.TextStyle(fontSize: 8, color: _ink);
   final titleStyle = pw.TextStyle(
     fontSize: 13,
@@ -79,26 +67,167 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
     padding: const pw.EdgeInsets.only(top: 15, bottom: 7),
     child: pw.Text(value, style: titleStyle),
   );
-  pw.Widget metric(String title, String value) => pw.Expanded(
-    child: pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(horizontal: 8),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
+  pw.Widget summary(String label, int amount) => pw.Container(
+    padding: const pw.EdgeInsets.all(10),
+    decoration: const pw.BoxDecoration(color: _cream),
+    child: pw.Text('$label · ${kg(amount)} kg', style: titleStyle),
+  );
+
+  final request = report.request;
+  final programs = report.programs;
+  final entries = report.filteredEntries;
+  final dailyTotals = request.kind == ReportKind.range
+      ? report.dailyProduction
+      : const <String, int>{};
+  final total = entries.fold(0, (sum, row) => sum + grams(row['quantity_kg']));
+  final jobMeta = programs.firstOrNull;
+  final content = switch (request.kind) {
+    ReportKind.job => <pw.Widget>[
+      pw.Text(
+        'Job ${request.jobNumber ?? cellText(jobMeta?['job_number'])}',
+        style: titleStyle,
+      ),
+      if (jobMeta != null) ...[
+        pw.Text('Customer: ${cellText(jobMeta['party'])}', style: tableText),
+        pw.Text(
+          'Job date: ${dbDateLabel(jobMeta['job_date'])}',
+          style: tableText,
+        ),
+        pw.Text('Yarn: ${cellText(jobMeta['yarn'])}', style: tableText),
+        heading('Program summary'),
+        table(
+          [
+            'Program details',
+            'DIA',
+            'Design',
+            'Required (kg)',
+            'Completed (kg)',
+            'Balance (kg)',
+          ],
+          [
+            for (final row in programs)
+              [
+                'Program ${cellText(row['position'])}\nLoop ${cellText(row['loop_length'])}',
+                cellText(row['dia']),
+                cellText(row['specification']),
+                kg(grams(row['ordered_kg'])),
+                kg(grams(row['produced_kg'])),
+                kg(grams(row['balance_kg'])),
+              ],
+          ],
+          [1.35, .48, 1.5, 1, 1, .85],
+          numeric: {3, 4, 5},
+        ),
+      ] else
+        pw.Text('No matching programs.', style: tableText),
+      pw.SizedBox(height: 12),
+      summary('Total production', report.produced),
+    ],
+    ReportKind.daily => <pw.Widget>[
+      pw.Text(request.filterLabel, style: titleStyle),
+      pw.Text(
+        'Generated ${dbTimeLabel(report.generated.toIso8601String())}',
+        style: tableText,
+      ),
+      pw.SizedBox(height: 12),
+      pw.Row(
         children: [
-          pw.Text(title, style: const pw.TextStyle(fontSize: 8, color: _ink)),
-          pw.SizedBox(height: 4),
-          pw.Text(
-            value,
-            style: pw.TextStyle(
-              fontSize: 16,
-              color: _blue,
-              fontWeight: pw.FontWeight.bold,
+          pw.Expanded(child: summary('Total ordered', report.ordered)),
+          pw.Expanded(
+            child: summary(
+              'Balance',
+              programs.fold(
+                0,
+                (sum, row) =>
+                    sum + grams(row['balance_on_end_kg'] ?? row['balance_kg']),
+              ),
             ),
           ),
         ],
       ),
-    ),
-  );
+      if (programs.isNotEmpty) ...[
+        heading('Customer and job details (kg)'),
+        table(
+          ['Customer', 'Job', 'DIA', 'Design', 'Ordered', 'Balance'],
+          [
+            for (final row
+                in (programs.toList()..sort((a, b) {
+                  final party = cellText(
+                    a['party'],
+                  ).compareTo(cellText(b['party']));
+                  return party == 0
+                      ? cellText(
+                          a['job_number'],
+                        ).compareTo(cellText(b['job_number']))
+                      : party;
+                })))
+              [
+                cellText(row['party']),
+                cellText(row['job_number']),
+                cellText(row['dia']),
+                cellText(row['specification']),
+                kg(grams(row['ordered_kg'])),
+                kg(grams(row['balance_on_end_kg'] ?? row['balance_kg'])),
+              ],
+          ],
+          [1.8, 1.05, .55, 1.3, .85, .85],
+          numeric: {4, 5},
+        ),
+      ] else
+        pw.Text('No matching production records.', style: tableText),
+    ],
+    ReportKind.shift => <pw.Widget>[
+      pw.Text(request.filterLabel, style: titleStyle),
+      if (entries.isNotEmpty) ...[
+        heading('Production recorded for this shift'),
+        table(
+          ['Job', 'Customer', 'DIA', 'Program', 'Design', 'Production (kg)'],
+          [
+            for (final row in entries)
+              [
+                cellText(row['job_number']),
+                cellText(row['party']),
+                cellText(row['dia']),
+                cellText(row['program_position']),
+                cellText(row['specification']),
+                kg(grams(row['quantity_kg'])),
+              ],
+          ],
+          [1, 1.7, .5, .8, 1.55, 1],
+          numeric: {5},
+        ),
+      ] else
+        pw.Text('No matching production records.', style: tableText),
+      pw.SizedBox(height: 12),
+      summary('Total production', total),
+    ],
+    ReportKind.range => <pw.Widget>[
+      pw.Text('Job ${cellText(request.jobNumber)}', style: titleStyle),
+      pw.Text(
+        'Start date: ${dbDateLabel(request.start == null ? null : isoDate(request.start!))}',
+        style: tableText,
+      ),
+      pw.Text(
+        'End date: ${dbDateLabel(request.end == null ? null : isoDate(request.end!))}',
+        style: tableText,
+      ),
+      if (entries.isNotEmpty) ...[
+        heading('Date-wise production'),
+        table(
+          ['Date', 'Production (kg)'],
+          [
+            for (final date in (dailyTotals.keys.toList()..sort()))
+              [dbDateLabel(date), kg(dailyTotals[date]!)],
+          ],
+          [1, 1],
+          numeric: {1},
+        ),
+      ] else
+        pw.Text('No matching production records.', style: tableText),
+      pw.SizedBox(height: 12),
+      summary('Grand total production', total),
+    ],
+  };
 
   doc.addPage(
     pw.MultiPage(
@@ -161,233 +290,8 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
           ),
         ],
       ),
-      build: (context) => [
-        pw.Text(
-          report.request.filterLabel,
-          style: const pw.TextStyle(fontSize: 11, color: _ink),
-        ),
-        pw.SizedBox(height: 4),
-        pw.Text(
-          'Generated ${dbTimeLabel(report.generated.toIso8601String())}',
-          style: tableText,
-        ),
-        if (jobMeta != null && job) ...[
-          pw.SizedBox(height: 6),
-          pw.Text(
-            'Party ${jobMeta['party']}  |  Job date ${dbDateLabel(jobMeta['job_date'])}',
-            style: tableText,
-          ),
-          pw.Text('Yarn ${jobMeta['yarn']}', style: tableText),
-          pw.Text(
-            'Status ${report.programs.every((p) => p['completed'] == true) ? 'Completed' : 'Pending'}',
-            style: tableText,
-          ),
-        ],
-        pw.SizedBox(height: 12),
-        pw.Container(
-          padding: const pw.EdgeInsets.symmetric(vertical: 11),
-          decoration: pw.BoxDecoration(
-            color: _cream,
-            borderRadius: pw.BorderRadius.circular(6),
-          ),
-          child: pw.Row(
-            children: [
-              metric(
-                compact ? 'Total ordered' : 'Ordered',
-                '${kg(report.ordered)} kg',
-              ),
-              if (!compact)
-                metric('Period production', '${kg(report.period)} kg'),
-              metric(
-                'Balance',
-                '${kg(compact ? summaryBalance : report.balance)} kg',
-              ),
-              if (!compact)
-                metric(
-                  'Order completion',
-                  percent(report.produced, report.ordered),
-                ),
-            ],
-          ),
-        ),
-        if (compact && summary.isNotEmpty) ...[
-          heading(
-            daily ? 'Customer and job details (kg)' : 'DIA order details (kg)',
-          ),
-          table(
-            [
-              if (daily) ...['Customer', 'Job'],
-              'DIA',
-              'Design',
-              'Ordered',
-              'Balance',
-            ],
-            [
-              for (final row in summary)
-                [
-                  if (daily) ...[row.party, row.job],
-                  row.dia,
-                  row.design,
-                  kg(row.ordered),
-                  kg(row.balance),
-                ],
-            ],
-            daily ? [1.8, 1.05, .55, 1.3, .85, .85] : [.65, 2, 1, 1],
-            numeric: daily ? {4, 5} : {2, 3},
-          ),
-        ],
-        if (!compact && report.ordered > 0) ...[
-          pw.SizedBox(height: 4),
-          pw.LinearProgressIndicator(
-            value: (report.produced / report.ordered).clamp(0.0, 1.0),
-            backgroundColor: _cream,
-            valueColor: _blue,
-            minHeight: 4,
-          ),
-        ],
-        if (report.programs.isEmpty)
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 16),
-            child: pw.Text('No matching production records.', style: tableText),
-          ),
-        if (!compact && report.byDia.isNotEmpty) ...[
-          heading('DIA and shift totals (kg)'),
-          table(
-            ['DIA', 'Day', 'Night', 'Total'],
-            [
-              for (final dia in dias)
-                if (report.byDia[dia] case final amounts?)
-                  [
-                    '$dia',
-                    kg(amounts.$1),
-                    kg(amounts.$2),
-                    kg(amounts.$1 + amounts.$2),
-                  ],
-            ],
-            [1, 1, 1, 1],
-            numeric: {1, 2, 3},
-          ),
-        ],
-        if (!compact && report.programs.isNotEmpty) ...[
-          heading('Program quantities (kg)'),
-          if (!job)
-            pw.Text(
-              'Ordered, lifetime output and balance are counted once per program. Period output follows the selected filters.',
-              style: tableText,
-            ),
-          if (!job) pw.SizedBox(height: 5),
-          table(
-            [
-              if (!job) 'Job / Party / Yarn',
-              'DIA / Program',
-              'Loop',
-              'Design / Remarks',
-              'Ordered',
-              if (!job) 'Period',
-              'Produced',
-              'Balance',
-              'Done',
-            ],
-            [
-              for (final p in report.programs)
-                [
-                  if (!job) '${p['job_number']} / ${p['party']}\n${p['yarn']}',
-                  '${p['dia']} / ${p['position']}',
-                  '${p['loop_length']}',
-                  '${p['specification']}${(p['remarks'] as String).isEmpty ? '' : '\n${p['remarks']}'}',
-                  kg(grams(p['ordered_kg'])),
-                  if (!job) kg(grams(p['period_kg'])),
-                  kg(grams(p['produced_kg'])),
-                  kg(grams(p['balance_kg'])),
-                  percent(grams(p['produced_kg']), grams(p['ordered_kg'])),
-                ],
-            ],
-            [if (!job) 2.3, 1.15, .65, 3, .85, if (!job) .85, .9, .85, .8],
-            numeric: job ? {1, 3, 4, 5, 6} : {2, 4, 5, 6, 7, 8},
-          ),
-        ],
-        if (!compact && report.entries.isNotEmpty) ...[
-          heading('Production history'),
-          table(
-            [
-              'Date',
-              'Shift',
-              if (!job) 'Job / Party',
-              'DIA / Program',
-              'Output (kg)',
-            ],
-            [
-              for (final e in report.entries)
-                [
-                  dbDateLabel(e['production_date']),
-                  shiftName(e),
-                  if (!job) '${e['job_number']} / ${e['party']}',
-                  '${e['dia']} / ${e['program_position']} · ${e['specification']}',
-                  kg(grams(e['quantity_kg'])),
-                ],
-            ],
-            [1.2, .85, if (!job) 2.2, 2.4, 1],
-            numeric: {job ? 3 : 4},
-          ),
-        ],
-        pw.Container(
-          margin: const pw.EdgeInsets.only(top: 33),
-          child: pw.Row(
-            children: [
-              for (final label in [
-                'Manager signature',
-                'Authorized verification',
-              ])
-                pw.Expanded(
-                  child: pw.Padding(
-                    padding: const pw.EdgeInsets.only(right: 24),
-                    child: pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Divider(color: _line, thickness: .7),
-                        pw.Text(label, style: tableText),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
+      build: (context) => content,
     ),
   );
   return doc.save();
 }
-
-typedef _OrderRow = ({
-  String party,
-  String job,
-  String dia,
-  String design,
-  int ordered,
-  int balance,
-});
-
-List<_OrderRow> _jobRows(List<RowData> programs) => [
-  for (final row in programs) _orderRow(row, 'balance_kg'),
-];
-
-List<_OrderRow> _dayRows(List<RowData> programs) => [
-  for (final row
-      in [...programs]..sort((a, b) {
-        final party = cellText(a['party']).compareTo(cellText(b['party']));
-        return party == 0
-            ? cellText(a['job_number']).compareTo(cellText(b['job_number']))
-            : party;
-      }))
-    _orderRow(row, 'balance_on_end_kg'),
-];
-
-_OrderRow _orderRow(RowData row, String balanceField) => (
-  party: cellText(row['party']),
-  job: cellText(row['job_number']),
-  dia: cellText(row['dia']),
-  design: cellText(row['specification']),
-  ordered: grams(row['ordered_kg']),
-  balance: grams(row[balanceField] ?? row['balance_kg']),
-);
