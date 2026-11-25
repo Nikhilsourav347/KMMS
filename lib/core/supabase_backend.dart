@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'domain.dart';
 import 'auth.dart';
+import 'auth_callback.dart';
 import 'auth_url.dart';
 import 'repository.dart';
 
@@ -18,11 +19,10 @@ const _connectionError = MillError(
   'Could not connect to Supabase. Check your internet connection and try again.',
 );
 const _authTimeout = Duration(seconds: 12);
-final _launchUri = Uri.base;
 bool _handledRecovery = false;
 
-Future<MillData> openSupabaseBackend() async {
-  final launchUri = _launchUri;
+Future<MillData> openSupabaseBackend({Uri? launchUri}) async {
+  final callback = parseAuthCallback(launchUri ?? Uri.base);
   final endpoint = Uri.tryParse(_url);
   if (endpoint == null ||
       endpoint.scheme != 'https' ||
@@ -62,50 +62,35 @@ Future<MillData> openSupabaseBackend() async {
   final preferences = SharedPreferencesAsync();
   final recoveryKey = 'ukm_password_recovery_${endpoint.host}';
   String? recoveryError;
-  if (!_handledRecovery && _isRecoveryUri(launchUri)) {
+  if (!_handledRecovery && callback != null) {
     try {
-      final hash = launchUri.queryParameters['token_hash'];
-      final Session session;
-      if (hash != null && hash.isNotEmpty) {
-        final response = await client.auth
-            .verifyOTP(tokenHash: hash, type: OtpType.recovery)
-            .timeout(_authTimeout);
-        final verified = response.session;
-        if (verified == null) throw AuthException('Missing recovery session.');
-        session = verified;
+      final session = await exchangeAuthCallback(client.auth, callback);
+      if (session == null) {
+        await preferences.remove(recoveryKey);
       } else {
-        final response = await client.auth
-            .getSessionFromUrl(launchUri)
-            .timeout(_authTimeout);
-        if (response.redirectType != 'recovery' &&
-            response.redirectType != AuthChangeEvent.passwordRecovery.name) {
-          // Email confirmation and profile email changes may also return a
-          // PKCE code. They use normal profile verification on startup.
-          await preferences.remove(recoveryKey);
-          _handledRecovery = true;
-          clearRecoveryUrl();
-          return SupabaseMill(
-            client,
-            recoveryPending: false,
-            recoveryError: null,
-            clearRecovery: () => preferences.remove(recoveryKey),
-          );
+        final sessionId = _sessionIdentifier(session);
+        if (sessionId == null) {
+          await client.auth.signOut(scope: SignOutScope.local);
+          throw const AuthException('Missing recovery session identifier.');
         }
-        session = response.session;
+        await preferences.setString(recoveryKey, sessionId);
       }
-      final sessionId = _sessionIdentifier(session);
-      if (sessionId == null) {
-        await client.auth.signOut(scope: SignOutScope.local);
-        throw AuthException('Missing recovery session identifier.');
-      }
-      await preferences.setString(recoveryKey, sessionId);
     } on AuthRetryableFetchException {
       throw _connectionError;
     } on TimeoutException {
       throw _connectionError;
-    } on AuthException {
+    } on AuthException catch (error) {
+      final missingVerifier =
+          callback.queryParameters.containsKey('code') &&
+          (error.code == 'bad_code_verifier' ||
+              error.message ==
+                  'Code verifier could not be found in local storage.');
+      recoveryError = missingVerifier
+          ? 'Request a new reset link. Older links must be opened in the browser that requested them.'
+          : 'This recovery link is invalid, expired, or already used. Request a new link.';
+    } on FormatException {
       recoveryError =
-          'This recovery link is invalid or expired. Request a new link.';
+          'This recovery link is invalid, expired, or already used. Request a new link.';
     }
     _handledRecovery = true;
     clearRecoveryUrl();
@@ -135,17 +120,6 @@ String? _sessionIdentifier(Session? session) {
   } on RangeError {
     return null;
   }
-}
-
-bool _isRecoveryUri(Uri uri) {
-  final fragment = Uri.splitQueryString(uri.fragment);
-  return uri.queryParameters['recovery'] == 'true' ||
-      uri.queryParameters['type'] == 'recovery' ||
-      fragment['type'] == 'recovery' ||
-      uri.queryParameters.containsKey('code') ||
-      fragment.containsKey('access_token') ||
-      uri.queryParameters.containsKey('error_code') ||
-      fragment.containsKey('error_code');
 }
 
 bool _isClientKey(String key) {
@@ -325,13 +299,13 @@ class SupabaseMill implements MillData {
   Future<void> saveMachine({
     int? id,
     required String number,
-    required int dia,
+    required String dia,
     String type = '',
     String specifications = '',
-  }) => _mutate('ukm_save_machine', {
+  }) => _mutate('ukm_save_machine_label', {
     'p_id': id,
     'p_number': number,
-    'p_dia': dia,
+    'p_dia_label': dia,
     'p_type': type,
     'p_specifications': specifications,
   });
@@ -640,15 +614,7 @@ class SupabaseMillAuth implements MillAuth {
     if (!validEmail(email)) {
       throw const MillError('Enter your work email first.');
     }
-    final redirect = kIsWeb
-        ? Uri.base
-              .resolve('.')
-              .replace(queryParameters: {'recovery': 'true'}, fragment: '')
-        : null;
-    await client.auth.resetPasswordForEmail(
-      normalizedEmail(email),
-      redirectTo: redirect?.toString(),
-    );
+    await client.auth.resetPasswordForEmail(normalizedEmail(email));
   });
 
   @override

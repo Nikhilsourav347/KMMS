@@ -78,7 +78,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
         label: 'Machine number',
         value: (machine?['number'] ?? machine?['name'] ?? '') as String,
       ),
-      (label: 'DIA', value: machine?['dia']?.toString() ?? ''),
+      (label: 'DIA', value: machineDiaValue(machine) ?? ''),
       (
         label: 'Machine type (optional)',
         value: machine?['type'] as String? ?? '',
@@ -89,9 +89,11 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
       ),
     ],
     (values) async {
-      final dia = int.tryParse(values[1].trim());
-      if (dia == null || dia < 1 || dia > 999) {
-        throw const MillError('Enter a whole-number DIA from 1 to 999.');
+      final dia = values[1].trim();
+      if (dia.isEmpty ||
+          dia.length > 40 ||
+          RegExp(r'[\x00-\x1f\x7f]').hasMatch(dia)) {
+        throw const MillError('Enter a DIA label of up to 40 characters.');
       }
       await repository.saveMachine(
         id: machine?['id'],
@@ -329,7 +331,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
                       DataCell(
                         Text((machine['number'] ?? machine['name']) as String),
                       ),
-                      DataCell(Text(machine['dia']?.toString() ?? 'Not set')),
+                      DataCell(Text(machineDiaValue(machine) ?? 'Not set')),
                       DataCell(Text(cellText(machine['type']))),
                       DataCell(
                         ConstrainedBox(
@@ -463,9 +465,6 @@ class _EditState extends State<_EditDialog> {
               TextField(
                 controller: inputs[index],
                 enabled: !saving,
-                keyboardType: field.label == 'DIA'
-                    ? TextInputType.number
-                    : null,
                 obscureText: field.label.toLowerCase().contains('password'),
                 decoration: InputDecoration(labelText: field.label),
               ),

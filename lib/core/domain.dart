@@ -15,8 +15,11 @@ const designs = [
 ];
 typedef RowData = Map<String, dynamic>;
 
+String? machineDiaValue(RowData? machine) =>
+    machine?['dia_label'] as String? ?? machine?['dia']?.toString();
+
 String machineDiaLabel(RowData machine) {
-  final dia = machine['dia'];
+  final dia = machineDiaValue(machine);
   return dia == null ? 'DIA not set' : 'DIA $dia';
 }
 

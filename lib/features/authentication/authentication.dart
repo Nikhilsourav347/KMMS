@@ -536,7 +536,7 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
                     ),
                     const SizedBox(height: 24),
                     Text(
-                      'Create a new password',
+                      'Reset Password',
                       style: Theme.of(context).textTheme.headlineMedium,
                     ),
                     const SizedBox(height: 6),
@@ -550,7 +550,7 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
                       obscureText: !visible,
                       autofillHints: const [AutofillHints.newPassword],
                       decoration: InputDecoration(
-                        labelText: 'New password',
+                        labelText: 'New Password',
                         suffixIcon: IconButton(
                           onPressed: busy
                               ? null
@@ -574,7 +574,7 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
                       obscureText: !visible,
                       autofillHints: const [AutofillHints.newPassword],
                       decoration: const InputDecoration(
-                        labelText: 'Confirm new password',
+                        labelText: 'Confirm Password',
                       ),
                       validator: (value) => value != password.text
                           ? 'Passwords do not match.'
@@ -593,7 +593,7 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
                     const SizedBox(height: 18),
                     FilledButton(
                       onPressed: busy ? null : save,
-                      child: Text(busy ? 'Updating…' : 'Update password'),
+                      child: Text(busy ? 'Updating…' : 'Reset Password'),
                     ),
                     TextButton(
                       onPressed: busy

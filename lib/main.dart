@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'app/startup.dart';
+import 'core/supabase_backend.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MillApp());
+  final launchUri = Uri.base;
+  runApp(MillApp(openBackend: () => openSupabaseBackend(launchUri: launchUri)));
 }

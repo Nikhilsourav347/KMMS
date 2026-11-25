@@ -32,7 +32,7 @@ abstract interface class MillData {
   Future<void> saveMachine({
     int? id,
     required String number,
-    required int dia,
+    required String dia,
     String type = '',
     String specifications = '',
   });

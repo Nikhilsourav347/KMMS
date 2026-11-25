@@ -134,8 +134,9 @@ void main() {
     final fields = find.byType(TextFormField);
     await tester.enterText(fields.first, 'new-test-password');
     await tester.enterText(fields.last, 'new-test-password');
-    await tester.ensureVisible(find.text('Update password'));
-    await tester.tap(find.text('Update password'));
+    final reset = find.widgetWithText(FilledButton, 'Reset Password');
+    await tester.ensureVisible(reset);
+    await tester.tap(reset);
     await tester.pumpAndSettle();
     expect(find.byType(LoginScreen), findsOneWidget);
   });

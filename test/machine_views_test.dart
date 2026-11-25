@@ -65,7 +65,7 @@ class _MachineData implements MillData {
   Future<void> saveMachine({
     int? id,
     required String number,
-    required int dia,
+    required String dia,
     String type = '',
     String specifications = '',
   }) async {
@@ -73,7 +73,7 @@ class _MachineData implements MillData {
       'id': id ?? records.length + 1,
       'name': number,
       'number': number,
-      'dia': dia,
+      'dia_label': dia,
       'type': type,
       'specifications': specifications,
     });
@@ -258,17 +258,17 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(
-        find.text('Enter a whole-number DIA from 1 to 999.'),
+        find.text('Enter a DIA label of up to 40 characters.'),
         findsOneWidget,
       );
 
-      await tester.enterText(fields.at(1), '34');
+      await tester.enterText(fields.at(1), '34A');
       await tester.enterText(fields.at(3), 'Fine gauge');
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(find.byType(DataTable), findsOneWidget);
       expect(find.text('KIT-4'), findsOneWidget);
-      expect(find.text('34'), findsOneWidget);
+      expect(find.text('34A'), findsOneWidget);
       expect(find.text('Fine gauge'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
