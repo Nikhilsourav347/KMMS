@@ -8,6 +8,7 @@ import '../core/domain.dart';
 import '../core/local_auth.dart';
 import '../core/local_database.dart';
 import '../core/repository.dart';
+import '../core/supabase_backend.dart';
 import '../core/theme.dart';
 import '../core/widgets.dart';
 import '../features/authentication/authentication.dart';
@@ -40,7 +41,7 @@ class _MillAppState extends State<MillApp> {
         if (await confirm(
               context,
               'Sign out?',
-              'Use your local credentials to sign in again.',
+              'Use your work credentials to sign in again.',
               action: 'Sign out',
             ) &&
             context.mounted) {
@@ -56,7 +57,7 @@ class _MillAppState extends State<MillApp> {
     router.refresh();
   }
 
-  MillRepository? repository;
+  MillData? repository;
   Staff? staff;
   bool ready = false;
   bool onboarded = false;
@@ -73,18 +74,21 @@ class _MillAppState extends State<MillApp> {
   }
 
   Future<void> _initialize() async {
-    MillRepository? opening;
+    MillData? opening;
     try {
       final savedOnboarding = await preferences.getBool(_onboardedKey);
       final savedTheme = await preferences.getString(_themeKey);
-      final db = await openMillDatabase();
-      final auth = LocalAuth(db);
-      opening = MillRepository(db, auth);
+      opening = await openSupabaseBackend();
+      if (opening == null) {
+        final db = await openMillDatabase();
+        opening = MillRepository(db, LocalAuth(db));
+      }
+      final auth = opening.auth;
 
       final accountsExist = await auth.hasAccounts;
       final session = accountsExist ? await auth.restore() : null;
       if (!mounted) {
-        await db.close();
+        await opening.close();
         return;
       }
       refresh(() {
@@ -96,7 +100,7 @@ class _MillAppState extends State<MillApp> {
         ready = true;
       });
     } catch (_) {
-      await opening?.db.close();
+      await opening?.close();
       if (mounted) refresh(() => startupError = true);
     }
   }
@@ -129,7 +133,7 @@ class _MillAppState extends State<MillApp> {
   @override
   void dispose() {
     router.dispose();
-    unawaited(repository?.db.close());
+    unawaited(repository?.close());
     super.dispose();
   }
 
@@ -144,10 +148,14 @@ class _MillAppState extends State<MillApp> {
             )
           : const SplashScreen();
     }
-    if (!onboarded) {
-      return OnboardingScreen(onContinue: complete, saving: saving);
-    }
     final auth = repository!.auth;
+    if (!onboarded) {
+      return OnboardingScreen(
+        onContinue: complete,
+        saving: saving,
+        usesCloud: auth.usesCloud,
+      );
+    }
     if (!hasAccounts) {
       return LocalSetupScreen(
         auth: auth,
@@ -198,7 +206,7 @@ class _StartupError extends StatelessWidget {
       child: PageBody(
         children: [
           Notice(
-            'The local database could not be opened. Try again.',
+            'The app could not connect to its data. Check the connection and try again.',
             icon: Icons.error_outline,
             action: FilledButton(onPressed: retry, child: const Text('Retry')),
           ),
@@ -261,9 +269,11 @@ class OnboardingScreen extends StatelessWidget {
     super.key,
     required this.onContinue,
     this.saving = false,
+    this.usesCloud = false,
   });
   final Future<void> Function() onContinue;
   final bool saving;
+  final bool usesCloud;
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
@@ -286,29 +296,37 @@ class OnboardingScreen extends StatelessWidget {
                       style: text.headlineMedium,
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      'Track machine status, schedule bookings and record daily production on this phone.',
+                    Text(
+                      usesCloud
+                          ? 'Track machine status, schedule bookings and record daily production across staff devices.'
+                          : 'Track machine status, schedule bookings and record daily production on this phone.',
                     ),
                     const SizedBox(height: 16),
-                    const _Guide(
+                    _Guide(
                       Icons.lock_outline,
                       'Secure access',
-                      'Set up the first administrator, then use Profile to add staff. Keep their recovery keys safe and sign out on shared devices.',
+                      usesCloud
+                          ? 'Sign in with the work account provided by your administrator. Sign out on shared devices.'
+                          : 'Set up the first administrator, then use Profile to add staff. Keep their recovery keys safe and sign out on shared devices.',
                     ),
-                    const _Guide(
+                    _Guide(
                       Icons.sync_outlined,
-                      'Offline storage',
-                      'Your records stay on this device. Sign-in and data entry work without internet. Wait for the save confirmation before leaving a form.',
+                      usesCloud ? 'Shared storage' : 'Offline storage',
+                      usesCloud
+                          ? 'Sign-in and saving records require internet. Supabase shares saved records with authorized staff. Wait for the save confirmation before leaving a form.'
+                          : 'Your records stay on this device. Sign-in and data entry work without internet. Wait for the save confirmation before leaving a form.',
                     ),
                     const _Guide(
                       Icons.picture_as_pdf_outlined,
                       'PDF reports',
                       'Open Reports to preview, download, print or share a PDF. The app uses the device’s file, print or sharing tools when you choose an action.',
                     ),
-                    const _Guide(
+                    _Guide(
                       Icons.privacy_tip_outlined,
                       'Data and privacy',
-                      'This device records who made changes. Save copies of important PDF reports outside the app and share them with authorized recipients.',
+                      usesCloud
+                          ? 'The company database records who made changes. Share exported PDF reports with authorized recipients.'
+                          : 'This device records who made changes. Save copies of important PDF reports outside the app and share them with authorized recipients.',
                     ),
                     const SizedBox(height: 16),
                     Align(

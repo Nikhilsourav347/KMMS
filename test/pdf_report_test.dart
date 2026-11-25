@@ -24,7 +24,7 @@ void main() {
     'ordered_kg': 500,
     'produced_kg': 300,
     'balance_kg': 200,
-    'period_kg': 100,
+    'period_kg': 24.75,
     'completed': false,
   };
   final entries = [

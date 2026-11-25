@@ -42,10 +42,21 @@ jobs:
       - name: Build and verify the web bundle
         env:
           PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           base_href="${PAGES_BASE_PATH%/}/"
+          defines=()
+          if [[ -n "$SUPABASE_URL" || -n "$SUPABASE_PUBLISHABLE_KEY" ]]; then
+            if [[ "$SUPABASE_URL" != https://* || "$SUPABASE_PUBLISHABLE_KEY" != sb_publishable_* ]]; then
+              echo "::error::Set both an HTTPS Supabase project URL and its publishable key."
+              exit 1
+            fi
+            defines+=("--dart-define=SUPABASE_URL=$SUPABASE_URL")
+            defines+=("--dart-define=SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY")
+          fi
           flutter pub get --enforce-lockfile
-          flutter build web --release --base-href "$base_href" --pwa-strategy=none --no-wasm-dry-run --no-pub
+          flutter build web --release --base-href "$base_href" --pwa-strategy=none --no-wasm-dry-run --no-pub "${defines[@]}"
           test -s build/web/flutter_bootstrap.js
           test -s build/web/main.dart.js
           test -s build/web/canvaskit/canvaskit.wasm

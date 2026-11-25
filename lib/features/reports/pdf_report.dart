@@ -133,6 +133,7 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
       pw.Row(
         children: [
           pw.Expanded(child: summary('Total ordered', report.ordered)),
+          pw.Expanded(child: summary('Daily production', total)),
           pw.Expanded(
             child: summary(
               'Balance',
@@ -148,7 +149,15 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
       if (programs.isNotEmpty) ...[
         heading('Customer and job details (kg)'),
         table(
-          ['Customer', 'Job', 'DIA', 'Design', 'Ordered', 'Balance'],
+          [
+            'Customer',
+            'Job',
+            'DIA',
+            'Design',
+            'Ordered',
+            'Produced',
+            'Balance',
+          ],
           [
             for (final row
                 in (programs.toList()..sort((a, b) {
@@ -167,11 +176,12 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
                 cellText(row['dia']),
                 cellText(row['specification']),
                 kg(grams(row['ordered_kg'])),
+                kg(grams(row['period_kg'])),
                 kg(grams(row['balance_on_end_kg'] ?? row['balance_kg'])),
               ],
           ],
-          [1.8, 1.05, .55, 1.3, .85, .85],
-          numeric: {4, 5},
+          [1.8, 1.05, .55, 1.3, .85, .85, .85],
+          numeric: {4, 5, 6},
         ),
       ] else
         pw.Text('No matching production records.', style: tableText),

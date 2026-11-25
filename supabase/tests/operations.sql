@@ -64,10 +64,10 @@ begin
   perform public.ukm_save_schedule(schedule,edit_version,28,entry_day,entry_day+3,1::smallint,null,
     'UKM Test Party','Revised booking');
 
-  payload := '[{"dia":28,"loop_length":"2.5","ordered_kg":"500.001","specification":"UKM Test Jersey","remarks":"First program"},
-              {"dia":28,"loop_length":"2.7","ordered_kg":"300","specification":"ukm  test jersey","remarks":"Second program"}]';
+  payload := '[{"dia":24,"loop_length":"2.5","ordered_kg":"500.001","specification":"UKM Custom Design","remarks":"First program"},
+              {"dia":24,"loop_length":"2.7","ordered_kg":"300","specification":"ukm  custom design","remarks":"Second program"}]';
   job := public.ukm_save_job(null,null,entry_day,'UKM_SQL_TEST','UKM TEST PARTY','Test yarn',payload);
-  if (select count(*) from public.specifications where normalized='ukm test jersey') <> 1 then
+  if (select count(*) from public.specifications where normalized='ukm custom design') <> 1 then
     raise exception 'Specification reuse failed.';
   end if;
   select id into strict first_program from public.job_programs where job_id=job and position=1 and remarks='First program';
@@ -112,18 +112,18 @@ begin
   select updated_at into edit_version from public.jobs where id=job;
   begin
     perform public.ukm_save_job(job,edit_version,entry_day,'UKM_SQL_TEST','UKM Test Party','Test yarn',
-      jsonb_build_array(jsonb_build_object('id',first_program,'dia',28,'loop_length',2.5,'ordered_kg',500.001,
-        'specification','UKM Test Jersey','remarks','First program')));
+      jsonb_build_array(jsonb_build_object('id',first_program,'dia',24,'loop_length',2.5,'ordered_kg',500.001,
+        'specification','UKM Custom Design','remarks','First program')));
     raise exception 'Expected production history protection' using errcode='XX000';
   exception when raise_exception then
     if sqlerrm not like '%cannot be removed%' then raise; end if;
   end;
   perform public.ukm_save_job(job,edit_version,entry_day,'UKM_SQL_TEST','UKM Test Party','Test yarn',
     jsonb_build_array(
-      jsonb_build_object('id',first_program,'dia',28,'loop_length',2.5,'ordered_kg',500.001,
-        'specification','UKM Test Jersey','remarks','Updated first remark'),
-      jsonb_build_object('id',second_program,'dia',28,'loop_length',2.7,'ordered_kg',300,
-        'specification','UKM Test Jersey','remarks','Second program')));
+      jsonb_build_object('id',first_program,'dia',24,'loop_length',2.5,'ordered_kg',500.001,
+        'specification','UKM Custom Design','remarks','Updated first remark'),
+      jsonb_build_object('id',second_program,'dia',24,'loop_length',2.7,'ordered_kg',300,
+        'specification','UKM Custom Design','remarks','Second program')));
   if (select remarks from public.job_programs where id=first_program) <> 'Updated first remark' then
     raise exception 'Job edit with preserved production did not save.'; end if;
 
@@ -132,10 +132,11 @@ begin
     raise exception 'Job report lost rows or counted a program twice.'; end if;
   payload := public.ukm_report(entry_day,entry_day,null,null,null,null);
   if jsonb_array_length(payload->'entries') < 3 then raise exception 'Daily report lost a shift.'; end if;
-  payload := public.ukm_report(entry_day,entry_day,'night',job,null,28);
+  payload := public.ukm_report(entry_day,entry_day,'night',job,null,24);
   if jsonb_array_length(payload->'entries') <> 2 then raise exception 'Date/shift report filter failed.'; end if;
-  payload := public.ukm_report(entry_day-6,entry_day,null,job,null,28);
-  if jsonb_array_length(payload->'entries') <> 3 then raise exception 'Date range report filter failed.'; end if;
+  payload := public.ukm_report(entry_day-6,entry_day,null,job,null,24);
+  if jsonb_array_length(payload->'entries') <> 3 or (payload->'entries'->0->>'job_id')::uuid is distinct from job then
+    raise exception 'Date range report filter failed.'; end if;
   payload := public.ukm_production_sheet(job,entry_day,'night');
   if (payload->'programs'->0->>'previous_kg')::numeric <> 200.001 then
     raise exception 'Correction sheet double-counted the existing shift.'; end if;
@@ -192,6 +193,60 @@ begin
   if not exists(select from public.audit_logs where table_name='production_entries' and operation='UPDATE'
     and before_row->>'quantity_kg' = '100.000' and after_row->>'quantity_kg' = '300.000') then
     raise exception 'Correction audit missing.'; end if;
+end
+$$;
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub','39000000-0000-0000-0000-000000000002',true);
+do $$
+begin
+  perform public.ukm_save_machine(null,'20',24,'Circular','Fixture');
+  if not exists(select from public.machines where number='20' and dia=24) then
+    raise exception 'Admin could not register the machine.'; end if;
+  begin
+    perform public.ukm_set_booking(1::smallint,current_date,true);
+    raise exception 'Admin could book a date.';
+  exception when insufficient_privilege then null;
+  end;
+end
+$$;
+
+select set_config('request.jwt.claim.sub','39000000-0000-0000-0000-000000000001',true);
+do $$
+declare
+  machine smallint;
+  fixture_day date := current_date - 20;
+  dates jsonb;
+begin
+  if public.ukm_profile()->>'email' is distinct from 'ukm-test-manager@example.invalid' then
+    raise exception 'Cloud profile omitted the account email.'; end if;
+  select id into strict machine from public.machines where number='20';
+  perform public.ukm_set_running(machine,fixture_day,true);
+  if not exists(select from jsonb_array_elements(public.ukm_machine_day(fixture_day)) as m
+      where (m->>'id')::smallint=machine and (m->>'running')::boolean) then
+    raise exception 'Daily machine state could not be read.'; end if;
+  perform public.ukm_save_schedule(null,null,24,fixture_day,fixture_day+2,machine,null,null,'Legacy range');
+  perform public.ukm_set_booking(machine,fixture_day+1,false);
+  select m->'booked_dates' into strict dates
+    from jsonb_array_elements(public.ukm_calendar(fixture_day,fixture_day+2)) as m where (m->>'id')::smallint=machine;
+  if dates is distinct from jsonb_build_array(fixture_day,fixture_day+2) then
+    raise exception 'Cancelling a date altered neighboring bookings.'; end if;
+  perform public.ukm_set_booking(machine,fixture_day+1,true);
+  begin
+    perform public.ukm_archive_machine(machine);
+    raise exception 'Manager could archive the machine.';
+  exception when insufficient_privilege then null;
+  end;
+end
+$$;
+
+select set_config('request.jwt.claim.sub','39000000-0000-0000-0000-000000000002',true);
+select public.ukm_set_manager_enabled('ukm-test-manager@example.invalid',false);
+select set_config('request.jwt.claim.sub','39000000-0000-0000-0000-000000000001',true);
+do $$
+begin
+  if public.ukm_profile() is not null or exists(select from public.jobs) then
+    raise exception 'Disabled manager retained access.'; end if;
 end
 $$;
 rollback;

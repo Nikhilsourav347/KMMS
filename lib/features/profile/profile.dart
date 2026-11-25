@@ -15,7 +15,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileState extends ConsumerState<ProfileScreen> {
-  MillRepository get repository => ref.read(repositoryProvider);
+  MillData get repository => ref.read(repositoryProvider);
   late Future<RowData> profile = repository.auth.profile();
   Future<List<RowData>>? managers;
 
@@ -24,7 +24,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
     managers = null;
   });
 
-  Future<void> _form(
+  Future<bool> _form(
     String title,
     List<({String label, String value})> fields,
     Future<void> Function(List<String>) save,
@@ -35,11 +35,12 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
       builder: (_) => _EditDialog(title: title, fields: fields, save: save),
     );
     if (mounted && changed == true) refresh();
+    return changed == true;
   }
 
   Future<void> addAccount(StaffRole role) async {
     RecoveryKey? key;
-    await _form(
+    final created = await _form(
       'Add ${role.label}',
       [
         (label: 'Name', value: ''),
@@ -55,7 +56,11 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
         );
       },
     );
-    if (!mounted || key == null) return;
+    if (!mounted || !created) return;
+    if (key == null) {
+      notify(context, '${role.label} account created.');
+      return;
+    }
     await showDialog<void>(
       context: context,
       barrierDismissible: false,

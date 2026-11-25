@@ -7,7 +7,74 @@ import 'package:ukm/core/domain.dart';
 import 'package:ukm/core/repository.dart';
 import 'package:ukm/core/theme.dart';
 import 'package:ukm/features/authentication/authentication.dart';
+import 'package:ukm/features/job_entry/jobs.dart';
 import 'package:ukm/features/production_entry/production.dart';
+
+class _ProductionFixture implements MillData {
+  final entries = <Shift, Map<String, Object?>>{};
+  List<RowData> savedPrograms = [];
+
+  @override
+  Stream<int> get updates => const Stream.empty();
+
+  @override
+  Future<List<RowData>> jobs() async => [
+    {'id': 'test', 'job_number': 'QA-024', 'party': 'Fixture party'},
+  ];
+
+  @override
+  Future<List<RowData>> names(String table) async => [];
+
+  @override
+  Future<RowData> productionSheet(
+    String jobId,
+    DateTime date,
+    Shift shift,
+  ) async => {
+    'job': (await jobs()).single,
+    'programs': [
+      for (final dia in [24, 26, 30])
+        {
+          'id': '$dia',
+          'dia': dia,
+          'position': 1,
+          'ordered_kg': 100,
+          'previous_kg': 0,
+          'specification': 'Herringbone $dia',
+          'loop_length': 2.5,
+          'shift_kg': entries[shift]?['$dia'],
+        },
+    ],
+  };
+
+  @override
+  Future<void> saveProduction(
+    String jobId,
+    DateTime date,
+    Shift shift,
+    List<RowData> lines,
+  ) async {
+    entries[shift] = {
+      for (final line in lines)
+        line['program_id'] as String: line['quantity_kg'],
+    };
+  }
+
+  @override
+  Future<void> saveJob({
+    RowData? existing,
+    required DateTime date,
+    required String number,
+    required String party,
+    required String yarn,
+    required List<RowData> programs,
+  }) async {
+    savedPrograms = programs;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   testWidgets('onboarding explains access, sync, reports and privacy', (
@@ -141,5 +208,141 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Test only · Fixture party'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('day and night entries send all three DIAs separately', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1100, 1250);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _ProductionFixture();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [localRepositoryProvider.overrideWithValue(store)],
+        child: const MaterialApp(home: Scaffold(body: ProductionScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Production date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Day'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Select job number'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('QA-024 · Fixture party'));
+    await tester.pumpAndSettle();
+
+    for (final shift in Shift.values) {
+      if (shift == Shift.night) {
+        await tester.ensureVisible(find.text('Night'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Night'));
+        await tester.pumpAndSettle();
+      }
+      for (final dia in [24, 26, 30]) {
+        expect(find.text('DIA $dia'), findsOneWidget);
+        expect(find.text('Program 1 · Herringbone $dia'), findsOneWidget);
+      }
+      final inputs = find.byWidgetPredicate(
+        (widget) =>
+            widget is TextFormField &&
+            widget.controller != null &&
+            widget.controller!.text.isEmpty,
+      );
+      expect(
+        find.text('${shift.label} Shift Production (KG)'),
+        findsNWidgets(3),
+      );
+      expect(inputs, findsNWidgets(3));
+      final fields = find.byType(TextFormField);
+      final quantities = shift == Shift.morning ? [1, 2, 3] : [4, 5, 6];
+      for (final (index, value) in quantities.indexed) {
+        final input = fields.at(index);
+        await tester.ensureVisible(input);
+        await tester.enterText(input, '$value');
+      }
+      final save = find.text('Confirm production');
+      await tester.ensureVisible(save);
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(
+        store.entries[shift]!.values.map(grams).toList(),
+        quantities.map((value) => value * 1000).toList(),
+      );
+    }
+    expect(store.entries[Shift.morning]!.keys, ['24', '26', '30']);
+    expect(store.entries[Shift.night]!.keys, ['24', '26', '30']);
+  });
+
+  testWidgets('Others requires and saves the entered design name', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1100, 1000);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _ProductionFixture();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [localRepositoryProvider.overrideWithValue(store)],
+        child: const MaterialApp(home: Scaffold(body: JobsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New job'));
+    await tester.pumpAndSettle();
+    final design = find.byType(DropdownButtonFormField<String>).first;
+    await tester.ensureVisible(design);
+    await tester.tap(design);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Others').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Enter Design Name'), findsOneWidget);
+    for (final (label, value) in [
+      ('Job number', 'CUSTOM-024'),
+      ('Party name', 'Fixture party'),
+      ('Yarn details', 'Cotton'),
+      ('Loop length', '2.5'),
+      ('Quantity (kg)', '50'),
+    ]) {
+      final field = find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is TextField && widget.decoration?.labelText == label,
+          )
+          .first;
+      await tester.ensureVisible(field);
+      await tester.enterText(field, value);
+    }
+    final dia = find.byType(DropdownButtonFormField<int>).first;
+    await tester.pumpAndSettle();
+    await Scrollable.ensureVisible(tester.element(dia), alignment: .5);
+    await tester.pumpAndSettle();
+    await tester.tap(dia);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('24').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save job'));
+    await tester.pumpAndSettle();
+    expect(store.savedPrograms, isEmpty);
+    final custom = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.labelText == 'Enter Design Name',
+    );
+    await tester.ensureVisible(custom);
+    await tester.enterText(custom, 'Mill Herringbone');
+    await tester.tap(find.text('Save job'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(store.savedPrograms.single['specification'], 'Mill Herringbone');
   });
 }

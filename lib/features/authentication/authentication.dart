@@ -15,7 +15,7 @@ class LoginScreen extends StatefulWidget {
     this.theme = ThemeMode.light,
     this.onTheme,
   });
-  final LocalAuth? auth;
+  final MillAuth? auth;
   final ValueChanged<Staff>? onSignIn;
   final ThemeMode theme;
   final ValueChanged<ThemeMode>? onTheme;
@@ -96,8 +96,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ],
                                 Text('Sign in', style: text.headlineMedium),
                                 const SizedBox(height: 5),
-                                const Text(
-                                  'Local testing · Use the account registered for Unique Knitting Mills.',
+                                Text(
+                                  widget.auth?.usesCloud == true
+                                      ? 'Use your Unique Knitting Mills staff account.'
+                                      : 'Local testing · Use the account registered for Unique Knitting Mills.',
                                 ),
                                 const SizedBox(height: 20),
                                 SegmentedButton<StaffRole>(
@@ -295,7 +297,7 @@ class LocalSetupScreen extends StatefulWidget {
     required this.auth,
     required this.onComplete,
   });
-  final LocalAuth auth;
+  final MillAuth auth;
   final VoidCallback onComplete;
   @override
   State<LocalSetupScreen> createState() => _LocalSetupState();
@@ -483,7 +485,7 @@ class _RecoveryKeys extends StatelessWidget {
 
 class _RecoveryDialog extends StatefulWidget {
   const _RecoveryDialog({required this.auth, required this.initialEmail});
-  final LocalAuth auth;
+  final MillAuth auth;
   final String initialEmail;
   @override
   State<_RecoveryDialog> createState() => _RecoveryDialogState();
@@ -494,8 +496,27 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
   final key = TextEditingController();
   final pass = TextEditingController();
   bool busy = false;
+  bool completed = false;
+  bool sent = false;
   String? replacement;
   String? error;
+  bool get cloud => widget.auth.usesCloud;
+
+  Future<void> sendCode() async {
+    setState(() {
+      busy = true;
+      error = null;
+      sent = false;
+    });
+    try {
+      await widget.auth.requestRecovery(email.text);
+      if (mounted) setState(() => sent = true);
+    } catch (failure) {
+      if (mounted) setState(() => error = friendlyError(failure));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
 
   Future<void> reset() async {
     if (busy) return;
@@ -504,7 +525,7 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
         pass.text.length < 12) {
       setState(
         () => error =
-            'Enter the work email, recovery key and a new password of at least 12 characters.',
+            'Enter the work email, ${cloud ? 'email code' : 'recovery key'} and a new password of at least 12 characters.',
       );
       return;
     }
@@ -514,7 +535,12 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
     });
     try {
       final code = await widget.auth.recover(email.text, key.text, pass.text);
-      if (mounted) setState(() => replacement = code);
+      if (mounted) {
+        setState(() {
+          replacement = code;
+          completed = true;
+        });
+      }
     } catch (failure) {
       if (mounted) setState(() => error = friendlyError(failure));
     } finally {
@@ -535,7 +561,11 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
     canPop: noBlock,
     child: AlertDialog(
       title: Text(
-        replacement == null ? 'Reset password' : 'Save the new recovery key',
+        replacement != null
+            ? 'Save the new recovery key'
+            : completed
+            ? 'Password updated'
+            : 'Reset password',
       ),
       content: SizedBox(
         width: 400,
@@ -550,9 +580,13 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
                 ),
                 const SizedBox(height: 10),
                 SelectableText(code),
-              ] else ...[
-                const Text(
-                  'Use the recovery key saved when this account was created.',
+              ] else if (completed)
+                const Text('Sign in with your new password.')
+              else ...[
+                Text(
+                  cloud
+                      ? 'Send a code to your work email, then enter it here.'
+                      : 'Use the recovery key saved when this account was created.',
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -561,11 +595,23 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
                   keyboardType: TextInputType.emailAddress,
                   decoration: const InputDecoration(labelText: 'Work email'),
                 ),
+                if (cloud)
+                  TextButton(
+                    onPressed: busy ? null : sendCode,
+                    child: Text(sent ? 'Resend email code' : 'Send email code'),
+                  ),
+                if (cloud && sent)
+                  const Text('Check your inbox for the recovery code.'),
                 const SizedBox(height: 10),
                 TextField(
                   controller: key,
                   enabled: !busy,
-                  decoration: const InputDecoration(labelText: 'Recovery key'),
+                  keyboardType: cloud
+                      ? TextInputType.number
+                      : TextInputType.text,
+                  decoration: InputDecoration(
+                    labelText: cloud ? 'Email recovery code' : 'Recovery key',
+                  ),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -584,7 +630,7 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
         ),
       ),
       actions: [
-        if (replacement == null) ...[
+        if (!completed) ...[
           TextButton(
             onPressed: busy ? null : () => Navigator.pop(context),
             child: const Text('Cancel'),
@@ -596,7 +642,7 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
         ] else
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('I saved the key'),
+            child: Text(cloud ? 'Done' : 'I saved the key'),
           ),
       ],
     ),

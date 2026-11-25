@@ -6,7 +6,7 @@ import 'package:sembast/sembast.dart';
 import 'domain.dart';
 import 'local_auth.dart';
 
-final localRepositoryProvider = Provider<MillRepository?>((ref) => null);
+final localRepositoryProvider = Provider<MillData?>((ref) => null);
 final repositoryProvider = Provider(
   (ref) => ref.watch(localRepositoryProvider)!,
 );
@@ -54,14 +54,67 @@ Future<List<RowData>> _all<K>(
 
 typedef MachineScheduleRow = ({RowData machine, Set<String> bookedDates});
 
-class MillRepository {
+abstract interface class MillData {
+  MillAuth get auth;
+  Stream<int> get updates;
+  Future<void> close();
+  Future<List<RowData>> registeredMachines();
+  Future<void> saveMachine({
+    int? id,
+    required String number,
+    required int dia,
+    String type = '',
+    String specifications = '',
+  });
+  Future<void> removeMachine(int id);
+  Future<List<RowData>> machineDay(DateTime date);
+  Future<void> setRunning(int id, DateTime date, bool running);
+  Future<List<MachineScheduleRow>> machineSchedule(
+    DateTime first,
+    DateTime last,
+  );
+  Future<void> scheduleMachine(int id, DateTime date);
+  Future<void> cancelMachineSchedule(int id, DateTime date);
+  Future<List<RowData>> names(String table);
+  Future<void> saveJob({
+    RowData? existing,
+    required DateTime date,
+    required String number,
+    required String party,
+    required String yarn,
+    required List<RowData> programs,
+  });
+  Future<List<RowData>> jobs();
+  Future<List<RowData>> programs(String jobId);
+  Future<RowData> productionSheet(String jobId, DateTime date, Shift shift);
+  Future<void> saveProduction(
+    String jobId,
+    DateTime date,
+    Shift shift,
+    List<RowData> lines,
+  );
+  Future<RowData> report({
+    DateTime? start,
+    DateTime? end,
+    Shift? shift,
+    String? jobId,
+    String? partyId,
+    int? dia,
+  });
+}
+
+class MillRepository implements MillData {
   MillRepository(this.db, this.auth, {DateTime Function()? clock})
     : clock = clock ?? DateTime.now;
   final Database db;
+  @override
   final LocalAuth auth;
   final DateTime Function() clock;
+  @override
+  Future<void> close() => db.close();
   String get _now => clock().toUtc().toIso8601String();
   DateTime get _today => plainDate(indiaTime(clock()));
+  @override
   Stream<int> get updates => _revision
       .onSnapshot(db)
       .map((row) => (row?.value['number'] as int?) ?? 0);
@@ -97,6 +150,7 @@ class MillRepository {
     });
   }
 
+  @override
   Future<List<RowData>> registeredMachines() async {
     await auth.authorize(db);
     return (await _all(
@@ -106,6 +160,7 @@ class MillRepository {
       ..sort((a, b) => _byText(a, b, 'name'));
   }
 
+  @override
   Future<void> saveMachine({
     int? id,
     required String number,
@@ -164,6 +219,7 @@ class MillRepository {
     );
   }, role: StaffRole.admin);
 
+  @override
   Future<void> removeMachine(int id) => _write((txn) async {
     final record = _machines.record(id);
     final previous = await record.get(txn);
@@ -175,6 +231,7 @@ class MillRepository {
     await _recordAudit(txn, 'machines', 'archive', previous, next);
   }, role: StaffRole.admin);
 
+  @override
   Future<List<RowData>> machineDay(DateTime date) async {
     await auth.authorize(db);
     final day = isoDate(date);
@@ -205,6 +262,7 @@ class MillRepository {
     });
   }
 
+  @override
   Future<void> setRunning(int id, DateTime date, bool running) => _write((
     txn,
   ) async {
@@ -234,6 +292,7 @@ class MillRepository {
     ];
   }
 
+  @override
   Future<List<MachineScheduleRow>> machineSchedule(
     DateTime first,
     DateTime last,
@@ -273,6 +332,7 @@ class MillRepository {
     });
   }
 
+  @override
   Future<void> scheduleMachine(int id, DateTime date) => _write((txn) async {
     final machine = await _machines.record(id).get(txn);
     if (machine == null || machine['removed_at'] != null) {
@@ -294,6 +354,7 @@ class MillRepository {
     await _recordAudit(txn, 'schedules', 'insert', null, booking);
   });
 
+  @override
   Future<void> cancelMachineSchedule(int id, DateTime date) => _write((
     txn,
   ) async {
@@ -366,6 +427,7 @@ class MillRepository {
     return key;
   }
 
+  @override
   Future<List<RowData>> names(String table) async {
     await auth.authorize(db);
     final results = await _all(
@@ -376,6 +438,7 @@ class MillRepository {
     return results;
   }
 
+  @override
   Future<void> saveJob({
     RowData? existing,
     required DateTime date,
@@ -504,6 +567,7 @@ class MillRepository {
   int _output(Iterable<RowData> records) =>
       records.fold(0, (sum, row) => sum + grams(row['quantity_kg']));
 
+  @override
   Future<List<RowData>> jobs() async {
     await auth.authorize(db);
     return db.transaction((txn) async {
@@ -518,6 +582,7 @@ class MillRepository {
     });
   }
 
+  @override
   Future<List<RowData>> programs(String jobId) async {
     await auth.authorize(db);
     return db.transaction((txn) async {
@@ -526,6 +591,7 @@ class MillRepository {
     });
   }
 
+  @override
   Future<RowData> productionSheet(
     String jobId,
     DateTime date,
@@ -574,6 +640,7 @@ class MillRepository {
     };
   }
 
+  @override
   Future<void> saveProduction(
     String jobId,
     DateTime date,
@@ -649,6 +716,7 @@ class MillRepository {
     await _all(_production, txn),
   );
 
+  @override
   Future<RowData> report({
     DateTime? start,
     DateTime? end,

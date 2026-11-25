@@ -1,6 +1,6 @@
 # Unique Knitting Mills
 
-This Flutter app is in local testing mode. It stores data in an app-private database on Android and in IndexedDB on web. Use test credentials. Each installation or browser origin has its own records.
+The default Flutter build stores records in an app-private database on Android and in IndexedDB on web. Each installation or browser profile has its own records. For shared staff accounts and records, follow the [Supabase setup guide](docs/supabase-setup.md).
 
 ## Getting started
 
@@ -39,4 +39,4 @@ GitHub Actions builds and deploys the site on pushes to `main`. Run **Deploy Flu
 - `lib/core/` contains local credential storage, profiles, operational transactions and Riverpod providers.
 - `lib/features/` contains authentication, profiles, machines, scheduling, jobs, production and reporting.
 - `test/` contains automated local workflow, navigation, mobile layout and report checks.
-- `supabase/` contains previously prepared server migrations. The local app has no Supabase configuration.
+- `supabase/` contains cloud schema migrations, database tests, and the staff provisioning function.

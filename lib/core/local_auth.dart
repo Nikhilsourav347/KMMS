@@ -24,6 +24,28 @@ class RecoveryKey {
   final String value;
 }
 
+abstract interface class MillAuth {
+  Staff? get currentStaff;
+  bool get usesCloud;
+  Future<bool> get hasAccounts;
+  Future<List<RecoveryKey>> setup(AccountSetup admin);
+  Future<Staff?> restore();
+  Future<Staff> signIn(String email, String password, {StaffRole? role});
+  Future<void> signOut();
+  Future<RowData> profile();
+  Future<void> editProfile(String name, String email, String phone);
+  Future<void> changePassword(String currentPassword, String newPassword);
+  Future<RecoveryKey?> addAccount(
+    StaffRole role,
+    AccountSetup account, {
+    String phone = '',
+  });
+  Future<List<RowData>> managers();
+  Future<void> setManagerEnabled(String email, bool enabled);
+  Future<void> requestRecovery(String email);
+  Future<String?> recover(String email, String code, String newPassword);
+}
+
 final _accounts = stringMapStoreFactory.store('accounts');
 const _sessionKey = 'ukm.offline.session';
 final _random = Random.secure();
@@ -61,7 +83,7 @@ bool _equal(String expected, String actual) {
   return difference == 0;
 }
 
-class LocalAuth {
+class LocalAuth implements MillAuth {
   LocalAuth(
     this.database, {
     this.storage = const FlutterSecureStorage(),
@@ -70,10 +92,20 @@ class LocalAuth {
   final Database database;
   final FlutterSecureStorage? storage;
   final int rounds;
+  @override
   Staff? currentStaff;
   String? currentEmail;
   String? _currentSession;
 
+  @override
+  bool get usesCloud => false;
+
+  @override
+  Future<void> requestRecovery(String email) async {
+    throw const MillError('Use the locally saved recovery key.');
+  }
+
+  @override
   Future<bool> get hasAccounts async => await _accounts.count(database) > 0;
 
   Future<Map<String, Object?>> _credentials(String password) async {
@@ -87,6 +119,7 @@ class LocalAuth {
     };
   }
 
+  @override
   Future<List<RecoveryKey>> setup(AccountSetup admin) async {
     final email = normalizedEmail(admin.email);
     if (admin.name.trim().isEmpty ||
@@ -113,6 +146,7 @@ class LocalAuth {
     return [RecoveryKey(StaffRole.admin, key)];
   }
 
+  @override
   Future<Staff?> restore() async {
     if (kIsWeb) return null;
     final encoded = await storage?.read(key: _sessionKey);
@@ -130,6 +164,7 @@ class LocalAuth {
     return currentStaff = Staff.fromRow(account);
   }
 
+  @override
   Future<Staff> signIn(String email, String password, {StaffRole? role}) async {
     final identity = normalizedEmail(email);
     final account = await _accounts.record(identity).get(database);
@@ -165,6 +200,7 @@ class LocalAuth {
     return currentStaff = Staff.fromRow(account);
   }
 
+  @override
   Future<void> signOut() async {
     final identity = currentEmail;
     final session = _currentSession;
@@ -208,9 +244,11 @@ class LocalAuth {
     'mill_id': 'unique-knitting-mills',
   };
 
+  @override
   Future<RowData> profile() async =>
       _publicProfile(currentEmail ?? '', await authorize(database));
 
+  @override
   Future<void> editProfile(String name, String email, String phone) async {
     final identity = normalizedEmail(email);
     final oldEmail = currentEmail;
@@ -243,6 +281,7 @@ class LocalAuth {
     }
   }
 
+  @override
   Future<void> changePassword(
     String currentPassword,
     String newPassword,
@@ -269,6 +308,7 @@ class LocalAuth {
     });
   }
 
+  @override
   Future<RecoveryKey> addAccount(
     StaffRole role,
     AccountSetup account, {
@@ -302,6 +342,7 @@ class LocalAuth {
     return RecoveryKey(role, key);
   }
 
+  @override
   Future<List<RowData>> managers() async {
     await authorize(database, role: StaffRole.admin);
     final records = await _accounts.find(database);
@@ -312,6 +353,7 @@ class LocalAuth {
     ];
   }
 
+  @override
   Future<void> setManagerEnabled(String email, bool enabled) async {
     await database.transaction((txn) async {
       await authorize(txn, role: StaffRole.admin);
@@ -326,6 +368,7 @@ class LocalAuth {
     });
   }
 
+  @override
   Future<String> recover(String email, String code, String newPassword) async {
     if (newPassword.length < 12) {
       throw const MillError(
