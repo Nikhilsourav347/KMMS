@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ukm/app/dashboard.dart';
 import 'package:ukm/app/startup.dart';
 import 'package:ukm/core/domain.dart';
+import 'package:ukm/core/auth.dart';
 import 'package:ukm/core/repository.dart';
 import 'package:ukm/core/theme.dart';
 import 'package:ukm/features/authentication/authentication.dart';
@@ -77,23 +81,63 @@ class _ProductionFixture implements MillData {
 }
 
 void main() {
-  testWidgets('onboarding explains access, sync, reports and privacy', (
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets('first launch retries the backend and opens staff sign-in', (
     tester,
   ) async {
-    var continued = 0;
+    var attempts = 0;
+    final backend = _StartupBackend();
     await tester.pumpWidget(
-      MaterialApp(home: OnboardingScreen(onContinue: () async => continued++)),
+      MillApp(
+        openBackend: () async {
+          if (++attempts == 1) throw const MillError('Connection failed.');
+          return backend;
+        },
+      ),
     );
-    expect(find.text('Welcome to Unique Knitting Mills'), findsOneWidget);
-    expect(find.text('Secure access'), findsOneWidget);
-    expect(find.text('Offline storage'), findsOneWidget);
-    expect(find.text('PDF reports'), findsOneWidget);
-    expect(find.text('Data and privacy'), findsOneWidget);
-    await tester.ensureVisible(find.text('Get started'));
-    await tester.tap(find.text('Get started'));
-    await tester.pump();
-    expect(continued, 1);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Connection failed.'), findsOneWidget);
+    await tester.tap(find.text('Retry connection'));
+    await tester.pumpAndSettle();
+    expect(find.byType(LoginScreen), findsOneWidget);
+    expect(find.text('Create administrator'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  for (final role in StaffRole.values) {
+    testWidgets(
+      'restores ${role.label} session and returns to sign-in on logout',
+      (tester) async {
+        final backend = _StartupBackend();
+        backend.auth.currentStaff = Staff('Fixture', role);
+        await tester.pumpWidget(MillApp(openBackend: () async => backend));
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<Dashboard>(find.byType(Dashboard)).staff.role,
+          role,
+        );
+        await backend.auth.signOut();
+        await tester.pumpAndSettle();
+        expect(find.byType(LoginScreen), findsOneWidget);
+      },
+    );
+  }
+
+  testWidgets('recovery session opens password reset and returns to sign-in', (
+    tester,
+  ) async {
+    final backend = _StartupBackend();
+    backend.auth.isPasswordRecovery = true;
+    await tester.pumpWidget(MillApp(openBackend: () async => backend));
+    await tester.pumpAndSettle();
+    expect(find.byType(PasswordRecoveryScreen), findsOneWidget);
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.first, 'new-test-password');
+    await tester.enterText(fields.last, 'new-test-password');
+    await tester.ensureVisible(find.text('Update password'));
+    await tester.tap(find.text('Update password'));
+    await tester.pumpAndSettle();
+    expect(find.byType(LoginScreen), findsOneWidget);
   });
 
   testWidgets('login shows the two roles and password visibility', (
@@ -101,7 +145,7 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: const LoginScreen(auth: null),
+        home: LoginScreen(auth: _StartupAuth()),
         theme: millTheme(Brightness.light),
       ),
     );
@@ -131,8 +175,34 @@ void main() {
       tester
           .widget<FilledButton>(find.byKey(const ValueKey('sign-in-action')))
           .onPressed,
-      isNull,
+      isNotNull,
     );
+  });
+
+  testWidgets('wrong password stays on login and recovery requests a link', (
+    tester,
+  ) async {
+    final auth = _StartupAuth();
+    await tester.pumpWidget(MaterialApp(home: LoginScreen(auth: auth)));
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.first, 'fixture@example.invalid');
+    await tester.enterText(fields.last, 'wrong password');
+    final signIn = find.byKey(const ValueKey('sign-in-action'));
+    await tester.ensureVisible(signIn);
+    await tester.tap(signIn);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('The email address or password is incorrect.'),
+      findsOneWidget,
+    );
+    final forgot = find.text('Forgot password?');
+    await tester.ensureVisible(forgot);
+    await tester.tap(forgot);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Send recovery link'));
+    await tester.pumpAndSettle();
+    expect(auth.recoveryEmail, 'fixture@example.invalid');
+    expect(find.textContaining('one-time code'), findsOneWidget);
   });
 
   for (final role in StaffRole.values) {
@@ -220,7 +290,7 @@ void main() {
     final store = _ProductionFixture();
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [localRepositoryProvider.overrideWithValue(store)],
+        overrides: [millDataProvider.overrideWithValue(store)],
         child: const MaterialApp(home: Scaffold(body: ProductionScreen())),
       ),
     );
@@ -291,7 +361,7 @@ void main() {
     final store = _ProductionFixture();
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [localRepositoryProvider.overrideWithValue(store)],
+        overrides: [millDataProvider.overrideWithValue(store)],
         child: const MaterialApp(home: Scaffold(body: JobsScreen())),
       ),
     );
@@ -345,4 +415,53 @@ void main() {
     await tester.pumpAndSettle();
     expect(store.savedPrograms.single['specification'], 'Mill Herringbone');
   });
+}
+
+class _StartupAuth implements MillAuth {
+  final events = StreamController<AuthFlow>.broadcast();
+  String? recoveryEmail;
+  @override
+  Staff? currentStaff;
+  @override
+  bool isPasswordRecovery = false;
+  @override
+  String? get recoveryError => null;
+  @override
+  Stream<AuthFlow> get stateChanges => events.stream;
+  @override
+  Future<Staff?> restore() async => currentStaff;
+  @override
+  Future<Staff> signIn(String email, String password, {StaffRole? role}) async {
+    throw const MillError('The email address or password is incorrect.');
+  }
+
+  @override
+  Future<void> requestRecovery(String email) async {
+    recoveryEmail = email;
+  }
+
+  @override
+  Future<void> signOut() async {
+    currentStaff = null;
+    isPasswordRecovery = false;
+    events.add(AuthFlow.signedOut);
+  }
+
+  @override
+  Future<void> completeRecovery(String newPassword) => signOut();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _StartupBackend implements MillData {
+  @override
+  final _StartupAuth auth = _StartupAuth();
+  @override
+  Stream<int> get updates => const Stream.empty();
+  @override
+  Future<List<RowData>> machineDay(DateTime date) async => [];
+  @override
+  Future<void> close() => auth.events.close();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -3,56 +3,104 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
-import 'package:sembast/sembast_memory.dart';
 import 'package:ukm/core/domain.dart';
-import 'package:ukm/core/local_auth.dart';
+import 'package:ukm/core/auth.dart';
 import 'package:ukm/core/repository.dart';
 import 'package:ukm/features/machine_status/machines.dart';
 import 'package:ukm/features/profile/profile.dart';
 import 'package:ukm/features/program_schedule/schedule.dart';
 
-Future<MillRepository> _repository(StaffRole role, {int machines = 3}) async {
-  final database = await newDatabaseFactoryMemory().openDatabase('machines');
-  addTearDown(database.close);
-  final auth = LocalAuth(database, storage: null, rounds: 1000);
-  await auth.setup(
-    const AccountSetup(
-      'Admin Test',
-      'admin@example.invalid',
-      'Admin test password',
-    ),
-  );
-  await auth.signIn(
-    'admin@example.invalid',
-    'Admin test password',
-    role: StaffRole.admin,
-  );
-  final repository = MillRepository(database, auth);
-  for (var i = 1; i <= machines; i++) {
-    await repository.saveMachine(number: '$i', dia: 24 + i * 2);
+class _MachineAuth implements MillAuth {
+  _MachineAuth(this.role);
+  final StaffRole role;
+
+  @override
+  Future<RowData> profile() async => {
+    'full_name': 'Fixture',
+    'email': 'fixture@example.invalid',
+    'role': role.name,
+  };
+
+  @override
+  Future<List<RowData>> managers() async => [];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _MachineData implements MillData {
+  _MachineData(StaffRole role, {int machines = 3}) : auth = _MachineAuth(role) {
+    for (var i = 1; i <= machines; i++) {
+      records.add({
+        'id': i,
+        'number': '$i',
+        'name': 'Machine $i',
+        'dia': 24 + i * 2,
+      });
+    }
   }
-  if (role == StaffRole.manager) {
-    await auth.addAccount(
-      StaffRole.manager,
-      const AccountSetup(
-        'Manager Test',
-        'manager@example.invalid',
-        'Manager test password',
+  @override
+  final _MachineAuth auth;
+  final records = <RowData>[];
+  final bookings = <int, Set<String>>{};
+
+  @override
+  Stream<int> get updates => const Stream.empty();
+  @override
+  Future<List<RowData>> registeredMachines() async => List.of(records);
+  @override
+  Future<List<RowData>> machineDay(DateTime date) => registeredMachines();
+  @override
+  Future<void> setRunning(int id, DateTime date, bool running) async {
+    records.firstWhere((row) => row['id'] == id)['running'] = running;
+  }
+
+  @override
+  Future<void> saveMachine({
+    int? id,
+    required String number,
+    required int dia,
+    String type = '',
+    String specifications = '',
+  }) async {
+    records.add({
+      'id': id ?? records.length + 1,
+      'name': number,
+      'number': number,
+      'dia': dia,
+      'type': type,
+      'specifications': specifications,
+    });
+  }
+
+  @override
+  Future<List<MachineScheduleRow>> machineSchedule(
+    DateTime first,
+    DateTime last,
+  ) async => [
+    for (final machine in records)
+      (
+        machine: machine,
+        bookedDates: Set.of(bookings[machine['id']] ?? const <String>{}),
       ),
-    );
-    await auth.signOut();
-    await auth.signIn(
-      'manager@example.invalid',
-      'Manager test password',
-      role: StaffRole.manager,
-    );
+  ];
+  @override
+  Future<void> scheduleMachine(int id, DateTime date) async {
+    (bookings[id] ??= {}).add(isoDate(date));
   }
-  return repository;
+
+  @override
+  Future<void> cancelMachineSchedule(int id, DateTime date) async {
+    bookings[id]?.remove(isoDate(date));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 Future<void> _show(
   WidgetTester tester,
-  MillRepository repository,
+  MillData repository,
   Widget screen,
 ) async {
   tester.view.devicePixelRatio = 1;
@@ -61,7 +109,7 @@ Future<void> _show(
   addTearDown(tester.view.resetPhysicalSize);
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [localRepositoryProvider.overrideWithValue(repository)],
+      overrides: [millDataProvider.overrideWithValue(repository)],
       child: MaterialApp(home: Scaffold(body: screen)),
     ),
   );
@@ -72,9 +120,7 @@ void main() {
   testWidgets('running switches sit in two columns and show the assigned DIA', (
     tester,
   ) async {
-    final repository = (await tester.runAsync(
-      () => _repository(StaffRole.manager),
-    ))!;
+    final repository = _MachineData(StaffRole.manager);
     await _show(
       tester,
       repository,
@@ -108,9 +154,7 @@ void main() {
   testWidgets(
     'manager can confirm or cancel a calendar booking with separate dialogs',
     (tester) async {
-      final repository = (await tester.runAsync(
-        () => _repository(StaffRole.manager, machines: 1),
-      ))!;
+      final repository = _MachineData(StaffRole.manager, machines: 1);
       await _show(
         tester,
         repository,
@@ -171,9 +215,7 @@ void main() {
   testWidgets(
     'admin profile blocks show the column register and require a DIA',
     (tester) async {
-      final repository = (await tester.runAsync(
-        () => _repository(StaffRole.admin, machines: 0),
-      ))!;
+      final repository = _MachineData(StaffRole.admin, machines: 0);
       await _show(tester, repository, ProfileScreen(logout: () async {}));
       expect(find.text('Profile details'), findsOneWidget);
       expect(find.text('Account settings'), findsOneWidget);

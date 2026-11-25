@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain.dart';
-import '../../core/local_auth.dart';
+import '../../core/auth.dart';
 import '../../core/repository.dart';
 import '../../core/widgets.dart';
 
@@ -39,7 +39,6 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
   }
 
   Future<void> addAccount(StaffRole role) async {
-    RecoveryKey? key;
     final created = await _form(
       'Add ${role.label}',
       [
@@ -49,7 +48,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
         (label: 'Initial password', value: ''),
       ],
       (v) async {
-        key = await repository.auth.addAccount(
+        await repository.auth.addAccount(
           role,
           AccountSetup(v[0], v[1], v[3]),
           phone: v[2],
@@ -57,26 +56,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
       },
     );
     if (!mounted || !created) return;
-    if (key == null) {
-      notify(context, '${role.label} account created.');
-      return;
-    }
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Save the recovery key'),
-        content: SelectableText(
-          'Share this key privately with the account owner.\n\n${key!.value}',
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
-    );
+    notify(context, '${role.label} account created.');
   }
 
   Future<void> editMachine([RowData? machine]) => _form(

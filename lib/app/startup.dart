@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/auth.dart';
 import '../core/domain.dart';
-import '../core/local_auth.dart';
-import '../core/local_database.dart';
 import '../core/repository.dart';
 import '../core/supabase_backend.dart';
 import '../core/theme.dart';
@@ -15,17 +14,20 @@ import '../features/authentication/authentication.dart';
 import 'dashboard.dart';
 import 'routing.dart';
 
-const _onboardedKey = 'ukm_onboarding_complete_v1';
 const _themeKey = 'ukm_theme';
+typedef BackendOpener = Future<MillData> Function();
 
 class MillApp extends StatefulWidget {
-  const MillApp({super.key});
+  const MillApp({super.key, this.openBackend = openSupabaseBackend});
+  final BackendOpener openBackend;
+
   @override
   State<MillApp> createState() => _MillAppState();
 }
 
 class _MillAppState extends State<MillApp> {
-  final preferences = SharedPreferencesAsync();
+  late final preferences = SharedPreferences.getInstance();
+  final backButton = RootBackButtonDispatcher();
   late final router = MillRouter(
     home: (context) => AnimatedSwitcher(
       duration: MediaQuery.disableAnimationsOf(context)
@@ -33,7 +35,7 @@ class _MillAppState extends State<MillApp> {
           : const Duration(milliseconds: 230),
       child: _destination(context),
     ),
-    role: () => staff?.role,
+    role: () => recovery ? null : staff?.role,
     page: (context, module, role) => ModulePage(
       module: module,
       role: role,
@@ -50,81 +52,86 @@ class _MillAppState extends State<MillApp> {
       },
     ),
   );
-  final backButton = RootBackButtonDispatcher();
-
-  void refresh(VoidCallback update) {
-    setState(update);
-    router.refresh();
-  }
 
   MillData? repository;
+  StreamSubscription<AuthFlow>? authEvents;
   Staff? staff;
   bool ready = false;
-  bool onboarded = false;
-  bool hasAccounts = false;
-  bool saving = false;
-  bool startupError = false;
+  bool initializing = false;
+  bool recovery = false;
+  String? startupError;
   ThemeMode theme = ThemeMode.light;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_initialize());
+  }
 
-    _initialize();
+  void refresh(VoidCallback update) {
+    if (!mounted) return;
+    setState(update);
+    router.refresh();
   }
 
   Future<void> _initialize() async {
+    if (initializing) return;
+    initializing = true;
     MillData? opening;
     try {
-      final savedOnboarding = await preferences.getBool(_onboardedKey);
-      final savedTheme = await preferences.getString(_themeKey);
-      opening = await openSupabaseBackend();
-      if (opening == null) {
-        final db = await openMillDatabase();
-        opening = MillRepository(db, LocalAuth(db));
-      }
+      opening = await widget.openBackend();
       final auth = opening.auth;
-
-      final accountsExist = await auth.hasAccounts;
-      final session = accountsExist ? await auth.restore() : null;
+      final session = await auth.restore();
+      final savedTheme = (await preferences).getString(_themeKey);
       if (!mounted) {
         await opening.close();
         return;
       }
+      authEvents = auth.stateChanges.listen(_handleAuthFlow);
       refresh(() {
         repository = opening;
         staff = session;
-        onboarded = savedOnboarding == true;
+        recovery = auth.isPasswordRecovery;
         theme = ThemeMode.values.asNameMap()[savedTheme] ?? ThemeMode.light;
-        hasAccounts = accountsExist;
+        startupError = null;
         ready = true;
       });
-    } catch (_) {
+    } catch (error) {
       await opening?.close();
-      if (mounted) refresh(() => startupError = true);
+      if (mounted) {
+        refresh(() {
+          repository = null;
+          staff = null;
+          ready = false;
+          startupError = friendlyError(error);
+        });
+      }
+    } finally {
+      initializing = false;
     }
   }
 
-  Future<void> complete() async {
-    if (saving) return;
-    refresh(() => saving = true);
-    try {
-      await preferences.setBool(_onboardedKey, true);
-      if (mounted) refresh(() => onboarded = true);
-    } finally {
-      if (mounted) refresh(() => saving = false);
-    }
+  void _handleAuthFlow(AuthFlow flow) {
+    refresh(() {
+      staff = null;
+      recovery = false;
+    });
   }
 
   Future<void> changeTheme(ThemeMode next) async {
     refresh(() => theme = next);
-    await preferences.setString(_themeKey, next.name);
+    await (await preferences).setString(_themeKey, next.name);
   }
 
   Future<void> logout(BuildContext context) async {
     try {
       await repository!.auth.signOut();
-      if (mounted) refresh(() => staff = null);
+      if (mounted) {
+        refresh(() {
+          staff = null;
+          recovery = false;
+        });
+      }
     } catch (error) {
       if (context.mounted) notify(context, friendlyError(error));
     }
@@ -133,36 +140,35 @@ class _MillAppState extends State<MillApp> {
   @override
   void dispose() {
     router.dispose();
+    unawaited(authEvents?.cancel());
     unawaited(repository?.close());
     super.dispose();
   }
 
   Widget _destination(BuildContext context) {
+    final error = startupError;
     if (!ready) {
-      return startupError
-          ? _StartupError(
+      return error == null
+          ? const SplashScreen()
+          : _StartupError(
+              message: error,
               retry: () {
-                refresh(() => startupError = false);
-                _initialize();
+                refresh(() => startupError = null);
+                unawaited(_initialize());
               },
-            )
-          : const SplashScreen();
+            );
     }
     final auth = repository!.auth;
-    if (!onboarded) {
-      return OnboardingScreen(
-        onContinue: complete,
-        saving: saving,
-        usesCloud: auth.usesCloud,
-      );
-    }
-    if (!hasAccounts) {
-      return LocalSetupScreen(
+    if (recovery || auth.isPasswordRecovery) {
+      return PasswordRecoveryScreen(
         auth: auth,
-        onComplete: () => refresh(() => hasAccounts = true),
+        onComplete: () => refresh(() {
+          staff = null;
+          recovery = false;
+        }),
       );
     }
-    final user = repository?.auth.currentStaff ?? staff;
+    final user = auth.currentStaff ?? staff;
     if (user == null) {
       return LoginScreen(
         auth: auth,
@@ -183,7 +189,7 @@ class _MillAppState extends State<MillApp> {
 
   @override
   Widget build(BuildContext context) => ProviderScope(
-    overrides: [localRepositoryProvider.overrideWithValue(repository)],
+    overrides: [millDataProvider.overrideWithValue(repository)],
     child: MaterialApp.router(
       title: companyName,
       debugShowCheckedModeBanner: false,
@@ -198,19 +204,31 @@ class _MillAppState extends State<MillApp> {
 }
 
 class _StartupError extends StatelessWidget {
-  const _StartupError({required this.retry});
+  const _StartupError({required this.message, required this.retry});
+  final String message;
   final VoidCallback retry;
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
-      child: PageBody(
-        children: [
-          Notice(
-            'The app could not connect to its data. Check the connection and try again.',
-            icon: Icons.error_outline,
-            action: FilledButton(onPressed: retry, child: const Text('Retry')),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: PageBody(
+            children: [
+              const Center(child: Logo(size: 92)),
+              Notice(
+                'Supabase is unavailable. $message',
+                icon: Icons.cloud_off_outlined,
+                action: FilledButton.icon(
+                  onPressed: retry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry connection'),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     ),
   );
@@ -218,6 +236,7 @@ class _StartupError extends StatelessWidget {
 
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
+
   @override
   Widget build(BuildContext context) {
     final reduced = MediaQuery.disableAnimationsOf(context);
@@ -245,14 +264,11 @@ class SplashScreen extends StatelessWidget {
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 24),
-                Semantics(
-                  label: 'Initializing',
-                  child: const SizedBox(
-                    width: 104,
-                    child: LinearProgressIndicator(
-                      minHeight: 3,
-                      borderRadius: BorderRadius.all(Radius.circular(3)),
-                    ),
+                const SizedBox(
+                  width: 104,
+                  child: LinearProgressIndicator(
+                    minHeight: 3,
+                    borderRadius: BorderRadius.all(Radius.circular(3)),
                   ),
                 ),
               ],
@@ -262,129 +278,4 @@ class SplashScreen extends StatelessWidget {
       ),
     );
   }
-}
-
-class OnboardingScreen extends StatelessWidget {
-  const OnboardingScreen({
-    super.key,
-    required this.onContinue,
-    this.saving = false,
-    this.usesCloud = false,
-  });
-  final Future<void> Function() onContinue;
-  final bool saving;
-  final bool usesCloud;
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
-              child: Panel(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Logo(size: 76),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Welcome to Unique Knitting Mills',
-                      style: text.headlineMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      usesCloud
-                          ? 'Track machine status, schedule bookings and record daily production across staff devices.'
-                          : 'Track machine status, schedule bookings and record daily production on this phone.',
-                    ),
-                    const SizedBox(height: 16),
-                    _Guide(
-                      Icons.lock_outline,
-                      'Secure access',
-                      usesCloud
-                          ? 'Sign in with the work account provided by your administrator. Sign out on shared devices.'
-                          : 'Set up the first administrator, then use Profile to add staff. Keep their recovery keys safe and sign out on shared devices.',
-                    ),
-                    _Guide(
-                      Icons.sync_outlined,
-                      usesCloud ? 'Shared storage' : 'Offline storage',
-                      usesCloud
-                          ? 'Sign-in and saving records require internet. Supabase shares saved records with authorized staff. Wait for the save confirmation before leaving a form.'
-                          : 'Your records stay on this device. Sign-in and data entry work without internet. Wait for the save confirmation before leaving a form.',
-                    ),
-                    const _Guide(
-                      Icons.picture_as_pdf_outlined,
-                      'PDF reports',
-                      'Open Reports to preview, download, print or share a PDF. The app uses the device’s file, print or sharing tools when you choose an action.',
-                    ),
-                    _Guide(
-                      Icons.privacy_tip_outlined,
-                      'Data and privacy',
-                      usesCloud
-                          ? 'The company database records who made changes. Share exported PDF reports with authorized recipients.'
-                          : 'This device records who made changes. Save copies of important PDF reports outside the app and share them with authorized recipients.',
-                    ),
-                    const SizedBox(height: 16),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: FilledButton.icon(
-                        onPressed: saving
-                            ? null
-                            : () async {
-                                try {
-                                  await onContinue();
-                                } catch (_) {
-                                  if (context.mounted) {
-                                    notify(
-                                      context,
-                                      'Could not save your preference. Try again.',
-                                    );
-                                  }
-                                }
-                              },
-                        icon: const Icon(Icons.arrow_forward),
-                        label: Text(saving ? 'Saving…' : 'Get started'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Guide extends StatelessWidget {
-  const _Guide(this.icon, this.title, this.text);
-  final IconData icon;
-  final String title;
-  final String text;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 7),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 21, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleSmall),
-              const SizedBox(height: 3),
-              Text(text),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
 }

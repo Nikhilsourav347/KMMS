@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import '../../core/auth.dart';
 import '../../core/domain.dart';
-import '../../core/local_auth.dart';
-import '../../core/repository.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
 
@@ -15,10 +13,12 @@ class LoginScreen extends StatefulWidget {
     this.theme = ThemeMode.light,
     this.onTheme,
   });
-  final MillAuth? auth;
+
+  final MillAuth auth;
   final ValueChanged<Staff>? onSignIn;
   final ThemeMode theme;
   final ValueChanged<ThemeMode>? onTheme;
+
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -26,22 +26,22 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final form = GlobalKey<FormState>();
   final email = TextEditingController();
-  final pass = TextEditingController();
+  final password = TextEditingController();
   StaffRole role = StaffRole.manager;
   bool visible = false;
   bool busy = false;
-  String? error;
+  late String? error = widget.auth.recoveryError;
 
   Future<void> signIn() async {
-    if (busy || widget.auth == null || !form.currentState!.validate()) return;
+    if (busy || !form.currentState!.validate()) return;
     setState(() {
       busy = true;
       error = null;
     });
     try {
-      final staff = await widget.auth!.signIn(
+      final staff = await widget.auth.signIn(
         email.text,
-        pass.text,
+        password.text,
         role: role,
       );
       if (mounted) widget.onSignIn?.call(staff);
@@ -55,7 +55,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void dispose() {
     email.dispose();
-    pass.dispose();
+    password.dispose();
     super.dispose();
   }
 
@@ -69,16 +69,16 @@ class _LoginScreenState extends State<LoginScreen> {
             Center(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 28,
+                  horizontal: 18,
+                  vertical: 24,
                 ),
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 960),
+                  constraints: const BoxConstraints(maxWidth: 940),
                   child: LayoutBuilder(
                     builder: (context, bounds) {
-                      final wide = bounds.maxWidth >= 745;
+                      final wide = bounds.maxWidth >= 740;
                       final fields = Padding(
-                        padding: EdgeInsets.all(wide ? 37 : 23),
+                        padding: EdgeInsets.all(wide ? 38 : 22),
                         child: Form(
                           key: form,
                           child: AutofillGroup(
@@ -90,19 +90,20 @@ class _LoginScreenState extends State<LoginScreen> {
                                     alignment: Alignment.centerLeft,
                                     child: Logo(size: 76),
                                   ),
-                                  const SizedBox(height: 9),
+                                  const SizedBox(height: 10),
                                   Text(companyName, style: text.titleLarge),
-                                  const SizedBox(height: 24),
+                                  const SizedBox(height: 22),
                                 ],
                                 Text('Sign in', style: text.headlineMedium),
                                 const SizedBox(height: 5),
-                                Text(
-                                  widget.auth?.usesCloud == true
-                                      ? 'Use your Unique Knitting Mills staff account.'
-                                      : 'Local testing · Use the account registered for Unique Knitting Mills.',
+                                const Text(
+                                  'Use your Unique Knitting Mills staff account.',
                                 ),
                                 const SizedBox(height: 20),
                                 SegmentedButton<StaffRole>(
+                                  direction: bounds.maxWidth < 290
+                                      ? Axis.vertical
+                                      : Axis.horizontal,
                                   showSelectedIcon: false,
                                   selected: {role},
                                   onSelectionChanged: busy
@@ -128,7 +129,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   keyboardType: TextInputType.emailAddress,
                                   textInputAction: TextInputAction.next,
                                   decoration: const InputDecoration(
-                                    labelText: 'Work email',
+                                    labelText: 'Email address',
                                     prefixIcon: Icon(Icons.mail_outline),
                                   ),
                                   validator: (value) => validEmail(value ?? '')
@@ -137,7 +138,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 const SizedBox(height: 12),
                                 TextFormField(
-                                  controller: pass,
+                                  controller: password,
                                   enabled: !busy,
                                   obscureText: !visible,
                                   autofillHints: const [AutofillHints.password],
@@ -149,8 +150,11 @@ class _LoginScreenState extends State<LoginScreen> {
                                     labelText: 'Password',
                                     prefixIcon: const Icon(Icons.lock_outline),
                                     suffixIcon: IconButton(
-                                      onPressed: () =>
-                                          setState(() => visible = !visible),
+                                      onPressed: busy
+                                          ? null
+                                          : () => setState(
+                                              () => visible = !visible,
+                                            ),
                                       tooltip: visible
                                           ? 'Hide password'
                                           : 'Show password',
@@ -165,26 +169,25 @@ class _LoginScreenState extends State<LoginScreen> {
                                 Align(
                                   alignment: Alignment.centerRight,
                                   child: TextButton(
-                                    onPressed: busy || widget.auth == null
+                                    onPressed: busy
                                         ? null
-                                        : () async {
-                                            await showDialog<void>(
-                                              context: context,
-                                              barrierDismissible: false,
-                                              builder: (_) => _RecoveryDialog(
-                                                auth: widget.auth!,
-                                                initialEmail: email.text,
-                                              ),
-                                            );
-                                          },
+                                        : () => showDialog<void>(
+                                            context: context,
+                                            barrierDismissible: false,
+                                            builder: (_) =>
+                                                ForgotPasswordDialog(
+                                                  auth: widget.auth,
+                                                  initialEmail: email.text,
+                                                ),
+                                          ),
                                     child: const Text('Forgot password?'),
                                   ),
                                 ),
-                                if (error != null)
+                                if (error case final message?)
                                   Padding(
                                     padding: const EdgeInsets.only(bottom: 10),
                                     child: Text(
-                                      error!,
+                                      message,
                                       style: TextStyle(
                                         color: Theme.of(
                                           context,
@@ -194,9 +197,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                 FilledButton.icon(
                                   key: const ValueKey('sign-in-action'),
-                                  onPressed: busy || widget.auth == null
-                                      ? null
-                                      : signIn,
+                                  onPressed: busy ? null : signIn,
                                   icon: busy
                                       ? const SizedBox.square(
                                           dimension: 17,
@@ -204,7 +205,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                             strokeWidth: 2,
                                           ),
                                         )
-                                      : const Icon(Icons.arrow_forward),
+                                      : const Icon(Icons.login),
                                   label: Text(busy ? 'Signing in…' : 'Sign in'),
                                 ),
                               ],
@@ -215,17 +216,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       return Card(
                         clipBehavior: Clip.antiAlias,
                         child: wide
-                            ? Stack(
+                            ? Row(
                                 children: [
-                                  Positioned(
-                                    left: 0,
-                                    top: 0,
-                                    bottom: 0,
-                                    width: bounds.maxWidth / 2,
+                                  Expanded(
                                     child: ColoredBox(
                                       color: millBlue,
                                       child: Padding(
-                                        padding: const EdgeInsets.all(36),
+                                        padding: const EdgeInsets.all(38),
                                         child: Column(
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
@@ -244,13 +241,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ),
                                     ),
                                   ),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: SizedBox(
-                                      width: bounds.maxWidth / 2,
-                                      child: fields,
-                                    ),
-                                  ),
+                                  Expanded(child: fields),
                                 ],
                               )
                             : fields,
@@ -277,6 +268,7 @@ class ThemeMenu extends StatelessWidget {
   const ThemeMenu({super.key, required this.mode, required this.onChanged});
   final ThemeMode mode;
   final ValueChanged<ThemeMode> onChanged;
+
   @override
   Widget build(BuildContext context) => PopupMenuButton<ThemeMode>(
     icon: const Icon(Icons.contrast),
@@ -291,222 +283,38 @@ class ThemeMenu extends StatelessWidget {
   );
 }
 
-class LocalSetupScreen extends StatefulWidget {
-  const LocalSetupScreen({
+class ForgotPasswordDialog extends StatefulWidget {
+  const ForgotPasswordDialog({
     super.key,
     required this.auth,
-    required this.onComplete,
+    required this.initialEmail,
   });
-  final MillAuth auth;
-  final VoidCallback onComplete;
-  @override
-  State<LocalSetupScreen> createState() => _LocalSetupState();
-}
 
-class _AccountFields {
-  final name = TextEditingController();
-  final email = TextEditingController();
-  final password = TextEditingController();
-  AccountSetup get values => AccountSetup(name.text, email.text, password.text);
-  void dispose() {
-    name.dispose();
-    email.dispose();
-    password.dispose();
-  }
-}
-
-class _LocalSetupState extends State<LocalSetupScreen> {
-  final key = GlobalKey<FormState>();
-  final admin = _AccountFields();
-
-  bool busy = false;
-  String? error;
-
-  Future<void> save() async {
-    if (busy || !key.currentState!.validate()) return;
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    try {
-      final codes = await widget.auth.setup(admin.values);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => _RecoveryKeys(codes: codes),
-      );
-      if (mounted) widget.onComplete();
-    } catch (failure) {
-      if (mounted) setState(() => error = friendlyError(failure));
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    admin.dispose();
-
-    super.dispose();
-  }
-
-  Widget account(String label, _AccountFields fields) => Panel(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(label, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: fields.name,
-          enabled: !busy,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(labelText: 'Full name'),
-          validator: (text) => (text ?? '').trim().isEmpty
-              ? 'Enter the staff member’s name.'
-              : null,
-        ),
-        const SizedBox(height: 10),
-        TextFormField(
-          controller: fields.email,
-          enabled: !busy,
-          keyboardType: TextInputType.emailAddress,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(labelText: 'Work email'),
-          validator: (text) =>
-              validEmail(text ?? '') ? null : 'Enter a valid work email.',
-        ),
-        const SizedBox(height: 10),
-        TextFormField(
-          controller: fields.password,
-          enabled: !busy,
-          obscureText: true,
-          decoration: const InputDecoration(
-            labelText: 'Password',
-            helperText: 'At least 12 characters',
-          ),
-          validator: (text) =>
-              (text?.length ?? 0) < 12 ? 'Use at least 12 characters.' : null,
-        ),
-      ],
-    ),
-  );
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text(companyName),
-      leading: const Padding(padding: EdgeInsets.all(8), child: Logo(size: 40)),
-    ),
-    body: SafeArea(
-      child: Form(
-        key: key,
-        child: PageBody(
-          children: [
-            const SectionTitle(
-              'Set up this installation',
-              detail:
-                  'Create the first administrator on this installation. Sign in as that administrator to add staff.',
-            ),
-            account('Administrator', admin),
-
-            if (error case final message?)
-              Text(
-                message,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: busy ? null : save,
-                icon: const Icon(Icons.lock_outline),
-                label: Text(
-                  busy ? 'Creating accounts…' : 'Create administrator',
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _RecoveryKeys extends StatelessWidget {
-  const _RecoveryKeys({required this.codes});
-  final List<RecoveryKey> codes;
-  @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: false,
-    child: AlertDialog(
-      title: const Text('Save recovery keys'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Store these keys somewhere safe. Each key can reset its account’s password on this device.',
-            ),
-            for (final code in codes) ...[
-              const SizedBox(height: 14),
-              Text(
-                code.role.label,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              Row(
-                children: [
-                  Expanded(child: SelectableText(code.value)),
-                  IconButton(
-                    tooltip: 'Copy ${code.role.label} key',
-                    icon: const Icon(Icons.copy_outlined),
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: code.value));
-                      if (context.mounted) {
-                        notify(context, 'Recovery key copied.');
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('I saved the keys'),
-        ),
-      ],
-    ),
-  );
-}
-
-class _RecoveryDialog extends StatefulWidget {
-  const _RecoveryDialog({required this.auth, required this.initialEmail});
   final MillAuth auth;
   final String initialEmail;
+
   @override
-  State<_RecoveryDialog> createState() => _RecoveryDialogState();
+  State<ForgotPasswordDialog> createState() => _ForgotPasswordDialogState();
 }
 
-class _RecoveryDialogState extends State<_RecoveryDialog> {
+class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
   late final email = TextEditingController(text: widget.initialEmail);
-  final key = TextEditingController();
-  final pass = TextEditingController();
+  final code = TextEditingController();
+  final password = TextEditingController();
   bool busy = false;
-  bool completed = false;
   bool sent = false;
-  String? replacement;
+  bool useCode = false;
+  bool completed = false;
   String? error;
-  bool get cloud => widget.auth.usesCloud;
 
-  Future<void> sendCode() async {
+  Future<void> send() async {
+    if (busy || !validEmail(email.text)) {
+      setState(() => error = 'Enter a valid work email.');
+      return;
+    }
     setState(() {
       busy = true;
       error = null;
-      sent = false;
     });
     try {
       await widget.auth.requestRecovery(email.text);
@@ -518,29 +326,15 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
     }
   }
 
-  Future<void> reset() async {
+  Future<void> resetWithCode() async {
     if (busy) return;
-    if (!validEmail(email.text) ||
-        key.text.trim().isEmpty ||
-        pass.text.length < 12) {
-      setState(
-        () => error =
-            'Enter the work email, ${cloud ? 'email code' : 'recovery key'} and a new password of at least 12 characters.',
-      );
-      return;
-    }
     setState(() {
       busy = true;
       error = null;
     });
     try {
-      final code = await widget.auth.recover(email.text, key.text, pass.text);
-      if (mounted) {
-        setState(() {
-          replacement = code;
-          completed = true;
-        });
-      }
+      await widget.auth.recoverWithCode(email.text, code.text, password.text);
+      if (mounted) setState(() => completed = true);
     } catch (failure) {
       if (mounted) setState(() => error = friendlyError(failure));
     } finally {
@@ -551,101 +345,251 @@ class _RecoveryDialogState extends State<_RecoveryDialog> {
   @override
   void dispose() {
     email.dispose();
-    key.dispose();
-    pass.dispose();
+    code.dispose();
+    password.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: noBlock,
-    child: AlertDialog(
-      title: Text(
-        replacement != null
-            ? 'Save the new recovery key'
-            : completed
-            ? 'Password updated'
-            : 'Reset password',
+  Widget build(BuildContext context) => AlertDialog(
+    scrollable: true,
+    title: const Text('Reset password'),
+    content: SizedBox(
+      width: 400,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            completed
+                ? 'Password updated. Sign in with your new password.'
+                : sent
+                ? 'Check your inbox for a recovery link or one-time code.'
+                : 'Enter your work email to request password recovery.',
+          ),
+          if (!completed && (!sent || useCode)) ...[
+            const SizedBox(height: 14),
+            TextField(
+              controller: email,
+              enabled: !busy,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Email address'),
+              onSubmitted: (_) {
+                if (!useCode) send();
+              },
+            ),
+          ],
+          if (!completed && useCode) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: code,
+              enabled: !busy,
+              keyboardType: TextInputType.number,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              decoration: const InputDecoration(labelText: 'Recovery code'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: password,
+              enabled: !busy,
+              obscureText: true,
+              autofillHints: const [AutofillHints.newPassword],
+              decoration: const InputDecoration(labelText: 'New password'),
+            ),
+          ],
+          if (error case final message?) ...[
+            const SizedBox(height: 10),
+            Text(
+              message,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
       ),
-      content: SizedBox(
-        width: 400,
+    ),
+    actions: [
+      TextButton(
+        onPressed: busy ? null : () => Navigator.pop(context),
+        child: Text(completed || sent && !useCode ? 'Done' : 'Cancel'),
+      ),
+      if (!completed && !useCode)
+        TextButton(
+          onPressed: busy
+              ? null
+              : () => setState(() {
+                  useCode = true;
+                  error = null;
+                }),
+          child: const Text('Enter recovery code'),
+        ),
+      if (!sent && !useCode)
+        FilledButton(
+          onPressed: busy ? null : send,
+          child: Text(busy ? 'Sending…' : 'Send recovery link'),
+        ),
+      if (useCode && !completed)
+        FilledButton(
+          onPressed: busy ? null : resetWithCode,
+          child: Text(busy ? 'Updating…' : 'Update password'),
+        ),
+    ],
+  );
+}
+
+class PasswordRecoveryScreen extends StatefulWidget {
+  const PasswordRecoveryScreen({
+    super.key,
+    required this.auth,
+    required this.onComplete,
+  });
+
+  final MillAuth auth;
+  final VoidCallback onComplete;
+
+  @override
+  State<PasswordRecoveryScreen> createState() => _PasswordRecoveryScreenState();
+}
+
+class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
+  final form = GlobalKey<FormState>();
+  final password = TextEditingController();
+  final confirmation = TextEditingController();
+  bool visible = false;
+  bool busy = false;
+  String? error;
+
+  Future<void> save() async {
+    if (busy || !form.currentState!.validate()) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.auth.completeRecovery(password.text);
+      if (mounted) widget.onComplete();
+    } catch (failure) {
+      if (mounted) setState(() => error = friendlyError(failure));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    password.dispose();
+    confirmation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: Center(
         child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (replacement case final code?) ...[
-                const Text(
-                  'Your password changed. Keep this replacement key somewhere safe.',
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Panel(
+              padding: const EdgeInsets.all(24),
+              child: Form(
+                key: form,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Logo(size: 76),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      companyName,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Create a new password',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Use at least 12 characters. You will return to sign in after the password is updated.',
+                    ),
+                    const SizedBox(height: 18),
+                    TextFormField(
+                      controller: password,
+                      enabled: !busy,
+                      obscureText: !visible,
+                      autofillHints: const [AutofillHints.newPassword],
+                      decoration: InputDecoration(
+                        labelText: 'New password',
+                        suffixIcon: IconButton(
+                          onPressed: busy
+                              ? null
+                              : () => setState(() => visible = !visible),
+                          tooltip: visible ? 'Hide password' : 'Show password',
+                          icon: Icon(
+                            visible
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                        ),
+                      ),
+                      validator: (value) => (value?.length ?? 0) < 12
+                          ? 'Use at least 12 characters.'
+                          : null,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: confirmation,
+                      enabled: !busy,
+                      obscureText: !visible,
+                      autofillHints: const [AutofillHints.newPassword],
+                      decoration: const InputDecoration(
+                        labelText: 'Confirm new password',
+                      ),
+                      validator: (value) => value != password.text
+                          ? 'Passwords do not match.'
+                          : null,
+                      onFieldSubmitted: (_) => save(),
+                    ),
+                    if (error case final message?) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        message,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: busy ? null : save,
+                      child: Text(busy ? 'Updating…' : 'Update password'),
+                    ),
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () async {
+                              try {
+                                await widget.auth.signOut();
+                                if (mounted) widget.onComplete();
+                              } catch (failure) {
+                                if (mounted) {
+                                  setState(
+                                    () => error = friendlyError(failure),
+                                  );
+                                }
+                              }
+                            },
+                      child: const Text('Back to sign in'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 10),
-                SelectableText(code),
-              ] else if (completed)
-                const Text('Sign in with your new password.')
-              else ...[
-                Text(
-                  cloud
-                      ? 'Send a code to your work email, then enter it here.'
-                      : 'Use the recovery key saved when this account was created.',
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: email,
-                  enabled: !busy,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'Work email'),
-                ),
-                if (cloud)
-                  TextButton(
-                    onPressed: busy ? null : sendCode,
-                    child: Text(sent ? 'Resend email code' : 'Send email code'),
-                  ),
-                if (cloud && sent)
-                  const Text('Check your inbox for the recovery code.'),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: key,
-                  enabled: !busy,
-                  keyboardType: cloud
-                      ? TextInputType.number
-                      : TextInputType.text,
-                  decoration: InputDecoration(
-                    labelText: cloud ? 'Email recovery code' : 'Recovery key',
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: pass,
-                  enabled: !busy,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'New password'),
-                ),
-              ],
-              if (error case final message?) ...[
-                const SizedBox(height: 8),
-                Text(message),
-              ],
-            ],
+              ),
+            ),
           ),
         ),
       ),
-      actions: [
-        if (!completed) ...[
-          TextButton(
-            onPressed: busy ? null : () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: busy ? null : reset,
-            child: Text(busy ? 'Updating…' : 'Reset password'),
-          ),
-        ] else
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(cloud ? 'Done' : 'I saved the key'),
-          ),
-      ],
     ),
   );
-  bool get noBlock => !busy && replacement == null;
 }

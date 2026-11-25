@@ -46,20 +46,25 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           base_href="${PAGES_BASE_PATH%/}/"
-          defines=()
-          if [[ -n "$SUPABASE_URL" || -n "$SUPABASE_PUBLISHABLE_KEY" ]]; then
-            if [[ "$SUPABASE_URL" != https://* || "$SUPABASE_PUBLISHABLE_KEY" != sb_publishable_* ]]; then
-              echo "::error::Set both an HTTPS Supabase project URL and its publishable key."
-              exit 1
-            fi
-            defines+=("--dart-define=SUPABASE_URL=$SUPABASE_URL")
-            defines+=("--dart-define=SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY")
+          test "$base_href" = /KMMS/
+          if [[ "$SUPABASE_URL" != https://*.supabase.co || "$SUPABASE_PUBLISHABLE_KEY" != sb_publishable_* ]]; then
+            echo "::error::Production requires an HTTPS Supabase project URL and publishable key."
+            exit 1
           fi
+          defines+=("--dart-define=SUPABASE_URL=$SUPABASE_URL")
+          defines+=("--dart-define=SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY")
           flutter pub get --enforce-lockfile
           flutter build web --release --base-href "$base_href" --pwa-strategy=none --no-wasm-dry-run --no-pub "${defines[@]}"
           test -s build/web/flutter_bootstrap.js
           test -s build/web/main.dart.js
           test -s build/web/canvaskit/canvaskit.wasm
+          revision="$GITHUB_SHA"
+          mv build/web/main.dart.js "build/web/main.$revision.dart.js"
+          sed -i "s/main\.dart\.js/main.$revision.dart.js/g" build/web/flutter_bootstrap.js
+          sed -i "s/flutter_bootstrap\.js/flutter_bootstrap.js?v=$revision/" build/web/index.html
+          cp web/retire_flutter_service_worker.js build/web/flutter_service_worker.js
+          node --check build/web/flutter_service_worker.js
+          grep -Fq "main.$revision.dart.js" build/web/flutter_bootstrap.js
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4

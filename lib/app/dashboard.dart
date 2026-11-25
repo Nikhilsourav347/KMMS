@@ -407,7 +407,7 @@ class _HeaderDetail extends StatelessWidget {
 
 final _dashboardMachines = FutureProvider.autoDispose
     .family<List<RowData>, DateTime>((ref, date) {
-      final repository = ref.watch(localRepositoryProvider);
+      final repository = ref.watch(millDataProvider);
       if (repository == null) return const [];
       ref.watch(revisionsProvider(Dataset.machines));
       return repository.machineDay(date);
@@ -418,7 +418,7 @@ class _DashboardMachineSummary extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final machines = ref.watch(_dashboardMachines(indiaToday())).value;
-    if (machines == null || (ref.watch(localRepositoryProvider) == null)) {
+    if (machines == null || (ref.watch(millDataProvider) == null)) {
       return const SizedBox.shrink();
     }
     final running = machines.where((row) => row['running'] == true).length;

@@ -1,6 +1,6 @@
 # Connect Unique Knitting Mills to Supabase
 
-The published APK and the default GitHub Pages build use local storage. A build configured for Supabase uses shared records and requires internet. Existing local records stay on their original device or browser and are not automatically uploaded. Create cloud staff accounts separately.
+The current app requires Supabase and internet access for staff sign-in and shared records. Older offline installations keep their operational data on their original device or browser. Cloud staff accounts are provisioned separately.
 
 ## Set up the project in the Supabase Dashboard
 
@@ -21,7 +21,7 @@ The published APK and the default GitHub Pages build use local storage. A build 
    ```
 
 5. Under **Edge Functions → Deploy a new function → Via Editor**, name the function `ukm-create-account`, replace the editor contents with [the repository’s function](../supabase/functions/ukm-create-account/index.ts) and deploy. In that function’s **Details** tab, turn off the legacy JWT verification toggle. The function validates the signed-in user with Supabase Auth and verifies their active Admin role before creating any account. Supabase supplies the privileged key through the function’s environment. [Dashboard deployment](https://supabase.com/docs/guides/functions/quickstart-dashboard) · [JWT verification settings](https://supabase.com/kb/troubleshooting/edge-function-401-error-response)
-6. Under **Authentication → Email Templates → Reset Password**, paste the [recovery email template](../supabase/templates/recovery.html). The template displays a one-time code. Configure **Authentication → SMTP Settings** to deliver recovery and email-change messages to staff outside the project team. [Email templates](https://supabase.com/docs/guides/auth/auth-email-templates) · [Custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
+6. Under **Authentication → Email Templates → Reset Password**, paste the [recovery email template](../supabase/templates/recovery.html). The template includes a reset link and a one-time code. Set the Site URL to the app root, ending with a slash. Configure **Authentication → SMTP Settings** to deliver recovery and email-change messages to staff outside the project team. [Email templates](https://supabase.com/docs/guides/auth/auth-email-templates) · [Custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
 7. Open **Connect** or **Settings → API Keys** and copy the **Project URL** and **Publishable key** (`sb_publishable_…`). These two values go into the Flutter build. Keep the database password, secret key, and service-role key private. [Supabase API keys](https://supabase.com/docs/guides/getting-started/api-keys)
 
 ## Verify cloud mode before switching GitHub Pages
@@ -46,5 +46,5 @@ flutter run -d chrome --dart-define-from-file=config.local.json
 
 ## Deploy the cloud build
 
-- **GitHub Pages.** In the repository, open **Settings → Secrets and variables → Actions → Variables**. Create the repository variables `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Run **Actions → Deploy Flutter to GitHub Pages → Run workflow** on `main`. Confirm the workflow succeeds and test in Safari or Chrome. The cloud build uses a fresh Supabase database with shared records. Rebuilding with both variables removed restores the browser’s original local mode and its existing local data.
+- **GitHub Pages.** In the repository, open **Settings → Secrets and variables → Actions → Variables**. Set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Push to `main` or run `gh workflow run deploy-pages.yml --ref main`. Confirm the workflow succeeds and open the app in Safari or Chrome. Pages uses the `/KMMS/` base path and publishes a fresh asset URL for each commit.
 - **Android.** Configure the same signing key as the existing release. Use the next unused 1.x version and build number for distribution, then build with `flutter build apk --release --target-platform android-arm64 --dart-define-from-file=config.local.json`. Verify it on the Android test phone before uploading it to GitHub Releases.

@@ -3,17 +3,26 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'domain.dart';
-import 'local_auth.dart';
+import 'auth.dart';
+import 'auth_url.dart';
 import 'repository.dart';
 
 const _url = String.fromEnvironment('SUPABASE_URL');
 const _key = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
+const _connectionError = MillError(
+  'Could not connect to Supabase. Check your internet connection and try again.',
+);
+const _authTimeout = Duration(seconds: 12);
+final _launchUri = Uri.base;
+bool _handledRecovery = false;
 
-Future<MillData?> openSupabaseBackend() async {
-  if (_url.isEmpty && _key.isEmpty) return null;
+Future<MillData> openSupabaseBackend() async {
+  final launchUri = _launchUri;
   final endpoint = Uri.tryParse(_url);
   if (endpoint == null ||
       endpoint.scheme != 'https' ||
@@ -26,6 +35,19 @@ Future<MillData?> openSupabaseBackend() async {
       'Configure an HTTPS Supabase URL and publishable key.',
     );
   }
+  try {
+    final response = await http
+        .get(
+          endpoint.replace(path: '/auth/v1/settings'),
+          headers: {'apikey': _key},
+        )
+        .timeout(_authTimeout);
+    if (response.statusCode != 200) throw _connectionError;
+  } on http.ClientException {
+    throw _connectionError;
+  } on TimeoutException {
+    throw _connectionError;
+  }
   final supabase = await Supabase.initialize(
     url: _url,
     publishableKey: _key,
@@ -36,7 +58,84 @@ Future<MillData?> openSupabaseBackend() async {
           : _NativeCloudSession('ukm.supabase.${endpoint.host}'),
     ),
   );
-  return SupabaseMill(supabase.client);
+  final client = supabase.client;
+  final preferences = SharedPreferencesAsync();
+  final recoveryKey = 'ukm_password_recovery_${endpoint.host}';
+  String? recoveryError;
+  if (!_handledRecovery && _isRecoveryUri(launchUri)) {
+    try {
+      final hash = launchUri.queryParameters['token_hash'];
+      final Session session;
+      if (hash != null && hash.isNotEmpty) {
+        final response = await client.auth
+            .verifyOTP(tokenHash: hash, type: OtpType.recovery)
+            .timeout(_authTimeout);
+        final verified = response.session;
+        if (verified == null) throw AuthException('Missing recovery session.');
+        session = verified;
+      } else {
+        final response = await client.auth
+            .getSessionFromUrl(launchUri)
+            .timeout(_authTimeout);
+        if (response.redirectType != 'recovery' &&
+            response.redirectType != AuthChangeEvent.passwordRecovery.name) {
+          await client.auth.signOut(scope: SignOutScope.local);
+          throw AuthException('The link did not contain a recovery session.');
+        }
+        session = response.session;
+      }
+      final sessionId = _sessionIdentifier(session);
+      if (sessionId == null) {
+        await client.auth.signOut(scope: SignOutScope.local);
+        throw AuthException('Missing recovery session identifier.');
+      }
+      await preferences.setString(recoveryKey, sessionId);
+    } on AuthRetryableFetchException {
+      throw _connectionError;
+    } on TimeoutException {
+      throw _connectionError;
+    } on AuthException {
+      recoveryError =
+          'This recovery link is invalid or expired. Request a new link.';
+    }
+    _handledRecovery = true;
+    clearRecoveryUrl();
+  }
+  final recoverySession = await preferences.getString(recoveryKey);
+  return SupabaseMill(
+    client,
+    recoveryPending:
+        recoverySession != null &&
+        recoverySession == _sessionIdentifier(client.auth.currentSession),
+    recoveryError: recoveryError,
+    clearRecovery: () => preferences.remove(recoveryKey),
+  );
+}
+
+String? _sessionIdentifier(Session? session) {
+  if (session == null) return null;
+  try {
+    final token = session.accessToken.split('.')[1];
+    final claims = jsonDecode(
+      utf8.decode(base64Url.decode(base64Url.normalize(token))),
+    );
+    final sessionId = claims is RowData ? claims['session_id'] : null;
+    return sessionId is String ? sessionId : null;
+  } on FormatException {
+    return null;
+  } on RangeError {
+    return null;
+  }
+}
+
+bool _isRecoveryUri(Uri uri) {
+  final fragment = Uri.splitQueryString(uri.fragment);
+  return uri.queryParameters['recovery'] == 'true' ||
+      uri.queryParameters['type'] == 'recovery' ||
+      fragment['type'] == 'recovery' ||
+      uri.queryParameters.containsKey('code') ||
+      uri.queryParameters.containsKey('error_code') ||
+      fragment.containsKey('error_code');
 }
 
 bool _isClientKey(String key) {
@@ -82,7 +181,16 @@ Future<T> _cloud<T>(Future<T> Function() run) async {
     throw const MillError(
       'Supabase could not complete the request. Check the connection or project setup.',
     );
+  } on AuthRetryableFetchException {
+    throw _connectionError;
+  } on http.ClientException {
+    throw _connectionError;
+  } on TimeoutException {
+    throw _connectionError;
   } on AuthException catch (error) {
+    if (error.code == 'invalid_credentials') {
+      throw const MillError('The email address or password is incorrect.');
+    }
     throw MillError(error.message);
   } on FunctionException catch (error) {
     final body = error.details;
@@ -95,7 +203,17 @@ Future<T> _cloud<T>(Future<T> Function() run) async {
 }
 
 class SupabaseMill implements MillData {
-  SupabaseMill(this.client) : auth = SupabaseMillAuth(client) {
+  SupabaseMill(
+    this.client, {
+    required bool recoveryPending,
+    required String? recoveryError,
+    required Future<void> Function() clearRecovery,
+  }) : auth = SupabaseMillAuth(
+         client,
+         recoveryPending: recoveryPending,
+         recoveryError: recoveryError,
+         clearRecovery: clearRecovery,
+       ) {
     _session = client.auth.onAuthStateChange.listen((event) {
       if (event.session == null) {
         final channel = _channel;
@@ -152,6 +270,7 @@ class SupabaseMill implements MillData {
   @override
   Future<void> close() async {
     await _session.cancel();
+    await auth.close();
     final channel = _channel;
     _channel = null;
     if (channel != null) await client.removeChannel(channel);
@@ -341,31 +460,48 @@ class SupabaseMill implements MillData {
 }
 
 class SupabaseMillAuth implements MillAuth {
-  SupabaseMillAuth(this.client);
+  SupabaseMillAuth(
+    this.client, {
+    required bool recoveryPending,
+    required this.recoveryError,
+    required this.clearRecovery,
+  }) : _isPasswordRecovery = recoveryPending {
+    _authEvents = client.auth.onAuthStateChange.listen((state) {
+      if (state.event == AuthChangeEvent.signedOut) {
+        currentStaff = null;
+        _isPasswordRecovery = false;
+        _stateChanges.add(AuthFlow.signedOut);
+      }
+    }, onError: (Object _) {});
+  }
   final SupabaseClient client;
+  final _stateChanges = StreamController<AuthFlow>.broadcast();
+  late final StreamSubscription<AuthState> _authEvents;
+  bool _isPasswordRecovery;
+  @override
+  final String? recoveryError;
+  final Future<void> Function() clearRecovery;
 
   @override
   Staff? currentStaff;
   @override
-  bool get usesCloud => true;
+  bool get isPasswordRecovery => _isPasswordRecovery;
   @override
-  Future<bool> get hasAccounts async => true;
+  Stream<AuthFlow> get stateChanges => _stateChanges.stream;
 
-  @override
-  Future<List<RecoveryKey>> setup(AccountSetup admin) async {
-    throw const MillError(
-      'Create the first administrator in the Supabase Dashboard.',
-    );
+  Future<void> close() async {
+    await _authEvents.cancel();
+    await _stateChanges.close();
   }
 
   @override
   Future<Staff?> restore() async {
-    if (client.auth.currentSession == null) return null;
+    if (isPasswordRecovery || client.auth.currentSession == null) return null;
     return _readStaff();
   }
 
   Future<Staff?> _readStaff() => _cloud(() async {
-    final user = await client.rpc('ukm_profile');
+    final user = await client.rpc('ukm_profile').timeout(_authTimeout);
     if (user is! RowData) {
       await signOut();
       return null;
@@ -376,10 +512,12 @@ class SupabaseMillAuth implements MillAuth {
   @override
   Future<Staff> signIn(String email, String password, {StaffRole? role}) =>
       _cloud(() async {
-        await client.auth.signInWithPassword(
-          email: normalizedEmail(email),
-          password: password,
-        );
+        await client.auth
+            .signInWithPassword(
+              email: normalizedEmail(email),
+              password: password,
+            )
+            .timeout(_authTimeout);
         final staff = await _readStaff();
         if (staff == null) {
           throw const MillError(
@@ -396,6 +534,7 @@ class SupabaseMillAuth implements MillAuth {
   @override
   Future<void> signOut() => _cloud(() async {
     await client.auth.signOut(scope: SignOutScope.local);
+    await clearRecovery();
     currentStaff = null;
   });
 
@@ -444,7 +583,7 @@ class SupabaseMillAuth implements MillAuth {
       });
 
   @override
-  Future<RecoveryKey?> addAccount(
+  Future<void> addAccount(
     StaffRole role,
     AccountSetup account, {
     String phone = '',
@@ -462,7 +601,6 @@ class SupabaseMillAuth implements MillAuth {
         'phone': phone,
       },
     );
-    return null;
   });
 
   @override
@@ -483,17 +621,25 @@ class SupabaseMillAuth implements MillAuth {
     if (!validEmail(email)) {
       throw const MillError('Enter your work email first.');
     }
-    await client.auth.resetPasswordForEmail(normalizedEmail(email));
+    final redirect = kIsWeb
+        ? Uri.base
+              .resolve('.')
+              .replace(queryParameters: {'recovery': 'true'}, fragment: '')
+        : null;
+    await client.auth.resetPasswordForEmail(
+      normalizedEmail(email),
+      redirectTo: redirect?.toString(),
+    );
   });
 
   @override
-  Future<String?> recover(String email, String code, String newPassword) =>
+  Future<void> recoverWithCode(String email, String code, String password) =>
       _cloud(() async {
-        if (newPassword.length < 12) {
-          throw const MillError('Use at least 12 characters.');
+        if (!validEmail(email) || !RegExp(r'^\d{6,8}$').hasMatch(code.trim())) {
+          throw const MillError('Enter your email address and recovery code.');
         }
-        if (!RegExp(r'^\d{6,8}$').hasMatch(code.trim())) {
-          throw const MillError('Enter the code from your recovery email.');
+        if (password.length < 12) {
+          throw const MillError('Use at least 12 characters.');
         }
         await client.auth.verifyOTP(
           email: normalizedEmail(email),
@@ -501,10 +647,23 @@ class SupabaseMillAuth implements MillAuth {
           type: OtpType.recovery,
         );
         try {
-          await client.auth.updateUser(UserAttributes(password: newPassword));
+          await client.auth.updateUser(UserAttributes(password: password));
         } finally {
           await signOut();
         }
-        return null;
       });
+
+  @override
+  Future<void> completeRecovery(String newPassword) => _cloud(() async {
+    if (newPassword.length < 12) {
+      throw const MillError('Use at least 12 characters.');
+    }
+    if (!_isPasswordRecovery || client.auth.currentSession == null) {
+      throw const MillError(
+        'This recovery link is invalid or expired. Request a new link.',
+      );
+    }
+    await client.auth.updateUser(UserAttributes(password: newPassword));
+    await signOut();
+  });
 }
