@@ -15,6 +15,7 @@ import 'package:ukm/features/authentication/authentication.dart';
 import 'package:ukm/features/job_entry/jobs.dart';
 import 'package:ukm/features/production_entry/production.dart';
 import 'package:ukm/features/reports/reports.dart';
+import 'package:ukm/features/reports/report_model.dart';
 
 class _ProductionFixture implements MillData {
   final entries = <Shift, Map<String, Object?>>{};
@@ -22,6 +23,8 @@ class _ProductionFixture implements MillData {
   final dias = ['24', '26', '30A', '30A'];
   List<RowData> savedPrograms = [];
   final reportCalls = <(DateTime?, DateTime?, String?, String?, String?)>[];
+  final sheetCalls = <(String, DateTime, Shift)>[];
+  bool reportHasData = false;
 
   @override
   Stream<int> updates(Dataset dataset) => dataset == Dataset.machines
@@ -58,7 +61,37 @@ class _ProductionFixture implements MillData {
     String? dia,
   }) async {
     reportCalls.add((start, end, jobId, partyId, dia));
-    return {'entries': [], 'programs': [], 'days': []};
+    if (!reportHasData) return {'entries': [], 'programs': [], 'days': []};
+    final program = {
+      'id': 'program',
+      'job_id': 'test',
+      'job_number': 'QA-024',
+      'party': 'Fixture party',
+      'dia': '30A',
+      'position': 1,
+      'loop_length': 2.65,
+      'specification': 'Export fixture design',
+      'ordered_kg': 100,
+      'balance_kg': 80,
+      'job_date': isoDate(indiaToday()),
+    };
+    final daily = {
+      ...program,
+      'program_id': 'program',
+      'program_position': 1,
+      'production_date': isoDate(start ?? indiaToday()),
+      'morning_kg': 0,
+      'night_kg': 20,
+      'daily_kg': 20,
+      'cumulative_kg': 20,
+    };
+    return {
+      'entries': [
+        {...daily, 'shift': 'night', 'quantity_kg': 20},
+      ],
+      'programs': [program],
+      'days': [daily],
+    };
   }
 
   @override
@@ -66,22 +99,28 @@ class _ProductionFixture implements MillData {
     String jobId,
     DateTime date,
     Shift shift,
-  ) async => {
-    'job': (await jobs()).single,
-    'programs': [
-      for (final dia in [24, 26, 30])
-        {
-          'id': '$dia',
-          'dia': dia,
-          'position': 1,
-          'ordered_kg': 100,
-          'previous_kg': 0,
-          'specification': 'Herringbone $dia',
-          'loop_length': 2.5,
-          'shift_kg': entries[shift]?['$dia'],
-        },
-    ],
-  };
+  ) async {
+    sheetCalls.add((jobId, date, shift));
+    return {
+      'job': (await jobs()).single,
+      'programs': [
+        for (final dia in [24, '26', '30A'])
+          {
+            'id': '$dia',
+            'dia': dia,
+            'position': 1,
+            'ordered_kg': 100,
+            'previous_kg': 10,
+            'specification': 'Herringbone $dia',
+            'loop_length': 2.5,
+            'shift_kg': entries[shift]?['$dia'],
+            'shift_version': entries[shift]?.containsKey('$dia') == true
+                ? '2026-11-26T01:00:00Z'
+                : null,
+          },
+      ],
+    };
+  }
 
   @override
   Future<void> saveProduction(
@@ -346,7 +385,7 @@ void main() {
         await tester.tap(find.text('Night'));
         await tester.pumpAndSettle();
       }
-      for (final dia in [24, 26, 30]) {
+      for (final dia in ['24', '26', '30A']) {
         expect(find.text('DIA $dia'), findsOneWidget);
         expect(find.text('Program 1 · Herringbone $dia'), findsOneWidget);
       }
@@ -380,8 +419,16 @@ void main() {
         quantities.map((value) => value * 1000).toList(),
       );
     }
-    expect(store.entries[Shift.morning]!.keys, ['24', '26', '30']);
-    expect(store.entries[Shift.night]!.keys, ['24', '26', '30']);
+    expect(store.entries[Shift.morning]!.keys, ['24', '26', '30A']);
+    expect(store.entries[Shift.night]!.keys, ['24', '26', '30A']);
+    expect(find.text('Saved entry · edit to correct'), findsNWidgets(3));
+    final dateField = find.byType(DateField);
+    final today = indiaToday();
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    tester.widget<DateField>(dateField).onChanged!(yesterday);
+    await tester.pumpAndSettle();
+    expect(store.sheetCalls.last, ('test', yesterday, Shift.night));
+    expect(find.text('DIA 30A'), findsOneWidget);
   });
 
   testWidgets('Others requires and saves the entered design name', (
@@ -547,7 +594,7 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      final generate = find.text('Generate PDF');
+      final generate = find.text('Generate Report');
       await tester.ensureVisible(generate);
       await tester.tap(generate);
       await tester.pumpAndSettle();
@@ -589,6 +636,69 @@ void main() {
         isNull,
       );
     });
+  }
+
+  for (final kind in ReportKind.values) {
+    testWidgets(
+      '${kind.label} shows report data before export and clears on filter change',
+      (tester) async {
+        final store = _ProductionFixture()..reportHasData = true;
+        addTearDown(store.registryChanges.close);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [millDataProvider.overrideWithValue(store)],
+            child: const MaterialApp(home: Scaffold(body: ReportsScreen())),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(kind.label));
+        await tester.pumpAndSettle();
+        if (kind == ReportKind.job) {
+          await tester.tap(find.text('Select job number'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('QA-024'));
+          await tester.pumpAndSettle();
+        } else if (kind == ReportKind.shift) {
+          await tester.tap(find.text('Night'));
+          await tester.pumpAndSettle();
+        }
+
+        final generate = find.text('Generate Report');
+        final export = find.text('Generate PDF');
+        expect(export, findsNothing);
+        await tester.ensureVisible(generate);
+        await tester.tap(generate);
+        await tester.pumpAndSettle();
+        expect(find.text('Date-wise production (kg)'), findsOneWidget);
+        expect(find.text('30A'), findsOneWidget);
+        expect(find.text('Daily subtotal'), findsOneWidget);
+        expect(find.text('PDF preview'), findsNothing);
+        expect(export, findsOneWidget);
+        if (kind == ReportKind.job) {
+          await tester.ensureVisible(export);
+          await tester.tap(export);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 400));
+          final preview = tester.widget<PdfReportScreen>(
+            find.byType(PdfReportScreen),
+          );
+          expect(preview.report.period, 20000);
+          expect(preview.report.balance, 80000);
+          expect(preview.report.request.jobId, 'test');
+          Navigator.of(tester.element(find.byType(PdfReportScreen))).pop();
+          await tester.pumpAndSettle();
+        }
+
+        final other = kind == ReportKind.job
+            ? ReportKind.daily
+            : ReportKind.job;
+        await tester.ensureVisible(find.text(other.label));
+        await tester.tap(find.text(other.label));
+        await tester.pumpAndSettle();
+        expect(export, findsNothing);
+        expect(find.text('Date-wise production (kg)'), findsNothing);
+      },
+    );
   }
 }
 

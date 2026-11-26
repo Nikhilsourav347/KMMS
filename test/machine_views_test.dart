@@ -4,7 +4,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:intl/intl.dart';
 import 'package:ukm/core/domain.dart';
 import 'package:ukm/core/auth.dart';
 import 'package:ukm/core/repository.dart';
@@ -321,8 +320,7 @@ void main() {
         const ScheduleScreen(role: StaffRole.manager),
       );
       final today = indiaToday();
-      final month = DateTime(today.year, today.month);
-      final cell = find.byKey(ValueKey('schedule-1-${isoDate(month)}'));
+      final cell = find.byKey(ValueKey('schedule-1-${isoDate(today)}'));
       expect(find.text('Machine / DIA'), findsOneWidget);
       expect(find.text('DIA 26'), findsOneWidget);
       expect(
@@ -359,18 +357,58 @@ void main() {
 
       await tester.tap(find.byTooltip('Next month'));
       await tester.pumpAndSettle();
+      final next = DateTime(today.year, today.month + 1);
       expect(
-        find.text(
-          DateFormat.yMMMM().format(DateTime(month.year, month.month + 1)),
-        ),
+        find.byKey(ValueKey('schedule-date-${isoDate(next)}')),
         findsOneWidget,
       );
       await tester.tap(find.text('Today'));
       await tester.pumpAndSettle();
-      expect(find.text(DateFormat.yMMMM().format(month)), findsOneWidget);
+      expect(cell.hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Admin schedule opens at today with a fixed machine column', (
+    tester,
+  ) async {
+    final repository = _MachineData(StaffRole.admin, machines: 1);
+    addTearDown(repository.statusEvents.close);
+    await _show(
+      tester,
+      repository,
+      const ScheduleScreen(role: StaffRole.admin),
+    );
+    final today = indiaToday();
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    final header = find.byKey(ValueKey('schedule-date-${isoDate(today)}'));
+    final machine = find.text('Machine / DIA');
+    final fixed = tester.getCenter(machine);
+    final initialDatePosition = tester.getTopLeft(header);
+    expect(header.hitTestable(), findsOneWidget);
+    expect(
+      find.byKey(ValueKey('schedule-date-${isoDate(yesterday)}')).hitTestable(),
+      findsNothing,
+    );
+    await tester.drag(header, const Offset(-150, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(machine), fixed);
+    expect(tester.getTopLeft(header).dx, lessThan(initialDatePosition.dx));
+    await tester.tap(find.text('Today'));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(header), initialDatePosition);
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(
+        ValueKey(
+          'schedule-date-${isoDate(DateTime(today.year, today.month - 1))}',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(header, findsNothing);
+  });
 
   testWidgets(
     'admin profile blocks show the column register and require a DIA',

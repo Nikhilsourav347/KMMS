@@ -124,13 +124,7 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
                   DateField(
                     'Production date',
                     date,
-                    busy
-                        ? null
-                        : (value) => _changeFilters(() {
-                            date = value;
-                            shift = null;
-                            jobId = null;
-                          }),
+                    busy ? null : (value) => _changeFilters(() => date = value),
                     last: indiaToday(),
                   ),
                   SegmentedButton<Shift>(
@@ -175,6 +169,15 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
           FutureBuilder<RowData>(
             future: details,
             builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Column(
+                  children: [
+                    LinearProgressIndicator(),
+                    SizedBox(height: 8),
+                    Text('Loading production sheet…'),
+                  ],
+                );
+              }
               if (snapshot.hasError) {
                 return Notice(
                   friendlyError(snapshot.error!),
@@ -183,9 +186,6 @@ class _ProductionFormState extends ConsumerState<_ProductionForm>
                     child: const Text('Retry'),
                   ),
                 );
-              }
-              if (snapshot.connectionState != ConnectionState.done) {
-                return const LinearProgressIndicator();
               }
               final result = snapshot.data!;
               final job = related(result, 'job');
@@ -315,42 +315,46 @@ class _SheetState extends State<_Sheet> {
           ),
         ),
         const SizedBox(height: 14),
-        for (final dia
-            in (widget.programs.map((p) => p['dia'] as int).toSet().toList()
-              ..sort()))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Panel(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'DIA $dia',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  for (final p in widget.programs.where(
-                    (p) => p['dia'] == dia,
-                  )) ...[
-                    const Divider(height: 26),
-                    _ProductionLine(
-                      program: p,
-                      field: fields[p['id']]!,
-                      shift: widget.shift,
-                      enabled: !widget.busy,
+        if (widget.programs.isEmpty)
+          const Notice('This job has no programs to record.')
+        else ...[
+          for (final dia in sortedDias(
+            widget.programs.map((p) => cellText(p['dia'])),
+          ))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Panel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'DIA $dia',
+                      style: Theme.of(context).textTheme.titleLarge,
                     ),
+                    for (final p in widget.programs.where(
+                      (p) => cellText(p['dia']) == dia,
+                    )) ...[
+                      const Divider(height: 26),
+                      _ProductionLine(
+                        program: p,
+                        field: fields[p['id']]!,
+                        shift: widget.shift,
+                        enabled: !widget.busy,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: widget.busy ? null : apply,
+              icon: const Icon(Icons.save_outlined),
+              label: Text(widget.busy ? 'Saving…' : 'Confirm production'),
+            ),
           ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: FilledButton.icon(
-            onPressed: widget.busy || fields.isEmpty ? null : apply,
-            icon: const Icon(Icons.save_outlined),
-            label: Text(widget.busy ? 'Saving…' : 'Confirm production'),
-          ),
-        ),
+        ],
       ],
     ),
   );
@@ -385,8 +389,8 @@ class _ProductionLine extends StatelessWidget {
         ValueListenableBuilder<TextEditingValue>(
           valueListenable: field,
           builder: (context, value, _) {
-            final total = previous + (parseGrams(value.text) ?? 0);
-            final balance = ordered - total;
+            final current = parseGrams(value.text) ?? 0;
+            final balance = ordered - previous - current;
             return Table(
               children: [
                 TableRow(
@@ -394,7 +398,8 @@ class _ProductionLine extends StatelessWidget {
                     for (final title in [
                       'DIA',
                       'Ordered',
-                      'Production',
+                      'Previous',
+                      '${shift.label} shift',
                       'Balance',
                     ])
                       Padding(
@@ -410,7 +415,8 @@ class _ProductionLine extends StatelessWidget {
                   children: [
                     Text('${program['dia']}'),
                     Text(kg(ordered)),
-                    Text(kg(total)),
+                    Text(kg(previous)),
+                    Text(kg(current)),
                     Text(
                       kg(balance),
                       style: TextStyle(color: balance < 0 ? stoppedRed : null),

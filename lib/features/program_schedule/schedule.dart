@@ -7,12 +7,19 @@ import '../../core/repository.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
 
+DateTime _calendarEnd(DateTime month) {
+  final today = indiaToday();
+  final current = month.year == today.year && month.month == today.month;
+  // Keep following dates visible when today is near the end of the month.
+  return DateTime(month.year, month.month + 1, current ? 31 : 0);
+}
+
 final _monthProvider = FutureProvider.autoDispose
     .family<List<MachineScheduleRow>, DateTime>((ref, month) {
       ref.watch(revisionsProvider(Dataset.schedule));
       return ref
           .watch(repositoryProvider)
-          .machineSchedule(month, DateTime(month.year, month.month + 1, 0));
+          .machineSchedule(month, _calendarEnd(month));
     });
 
 const _dayWidth = 112.0;
@@ -27,8 +34,12 @@ class ScheduleScreen extends ConsumerStatefulWidget {
 }
 
 class _ScheduleState extends ConsumerState<ScheduleScreen> {
-  late DateTime month = _monthOf(indiaToday());
-  final _datesController = ScrollController();
+  final _openedOn = indiaToday();
+  late DateTime month = _monthOf(_openedOn);
+  late final _datesController = ScrollController(
+    initialScrollOffset: (_openedOn.day - 1) * _dayWidth,
+    keepScrollOffset: false,
+  );
   final _pending = <(int, String)>{};
   int? _jumpDay;
 
@@ -77,7 +88,7 @@ class _ScheduleState extends ConsumerState<ScheduleScreen> {
       } else {
         await repository.scheduleMachine(id, date);
       }
-      if (mounted) ref.invalidate(_monthProvider(_monthOf(date)));
+      if (mounted) ref.invalidate(_monthProvider(month));
     } catch (error) {
       if (mounted) notify(context, friendlyError(error));
     } finally {
@@ -142,14 +153,15 @@ class _ScheduleState extends ConsumerState<ScheduleScreen> {
 
   Widget _calendar(List<MachineScheduleRow> rows) {
     final theme = Theme.of(context);
-    final today = isoDate(indiaToday());
+    final today = indiaToday();
+    final last = _calendarEnd(month);
     final days = [
       for (
-        var day = 1;
-        day <= DateTime(month.year, month.month + 1, 0).day;
-        day++
+        var day = month;
+        !day.isAfter(last);
+        day = DateTime(day.year, day.month, day.day + 1)
       )
-        DateTime(month.year, month.month, day),
+        day,
     ];
     final manager = widget.role == StaffRole.manager;
     return Card(
@@ -157,10 +169,13 @@ class _ScheduleState extends ConsumerState<ScheduleScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final machineWidth = constraints.maxWidth < 465 ? 108.0 : 148.0;
-          Widget header(String title, double width, {bool current = false}) =>
+          Widget header(String title, double width, {DateTime? date}) =>
               _CalendarCell(
+                key: date == null
+                    ? null
+                    : ValueKey('schedule-date-${isoDate(date)}'),
                 width: width,
-                color: current ? const Color(0xFF254E84) : millBlue,
+                color: date == today ? const Color(0xFF254E84) : millBlue,
                 child: Text(
                   title,
                   textAlign: TextAlign.center,
@@ -222,9 +237,9 @@ class _ScheduleState extends ConsumerState<ScheduleScreen> {
                           children: [
                             for (final date in days)
                               header(
-                                DateFormat('EEE dd').format(date),
+                                DateFormat('EEE dd MMM').format(date),
                                 _dayWidth,
-                                current: isoDate(date) == today,
+                                date: date,
                               ),
                           ],
                         ),
@@ -277,7 +292,12 @@ class _ScheduleState extends ConsumerState<ScheduleScreen> {
 }
 
 class _CalendarCell extends StatelessWidget {
-  const _CalendarCell({required this.width, required this.child, this.color});
+  const _CalendarCell({
+    super.key,
+    required this.width,
+    required this.child,
+    this.color,
+  });
   final double width;
   final Widget child;
   final Color? color;

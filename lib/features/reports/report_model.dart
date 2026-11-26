@@ -82,6 +82,72 @@ class ReportData {
       .toSet()
       .length;
 
+  bool get hasData => request.kind == ReportKind.job
+      ? programs.isNotEmpty
+      : filteredEntries.isNotEmpty;
+
+  List<(String, String)> get productionSummary => [
+    ('Production', '${kg(period)} kg'),
+    ('Jobs', '${request.kind == ReportKind.job ? 1 : jobCount}'),
+    ('Production days', '${productionDays.length}'),
+    (
+      'Distinct DIA',
+      '${programs.map((row) => row['dia'].toString()).toSet().length}',
+    ),
+    if (request.shift != Shift.night) ('Morning shift', '${kg(morning)} kg'),
+    if (request.shift != Shift.morning) ('Night shift', '${kg(night)} kg'),
+  ];
+
+  String get totalLabel => switch (request.kind) {
+    ReportKind.job => 'Grand total for selected job',
+    ReportKind.daily => 'Total production for selected date',
+    ReportKind.shift => 'Total production for selected shift',
+    ReportKind.range =>
+      request.dia == null
+          ? 'Grand total for selected date range'
+          : 'Grand total for DIA ${request.dia}',
+  };
+
+  String get balanceLabel => [
+    if (request.end != null) 'As of ${prettyDate(request.end!)}',
+    'Ordered ${kg(ordered)} kg',
+    'Remaining ${kg(balance)} kg',
+  ].join(' · ');
+
+  // The morning and night cells follow the six program identity columns.
+  List<T> productionColumns<T>(List<T> columns) => [
+    for (final (index, value) in columns.indexed)
+      if ((index != 6 || request.shift != Shift.night) &&
+          (index != 7 || request.shift != Shift.morning))
+        value,
+  ];
+
+  List<String> subtotalCells(String date, List<RowData> lines) =>
+      productionColumns([
+        'Daily subtotal',
+        '',
+        '',
+        '',
+        '',
+        '',
+        kg(lines.fold(0, (sum, row) => sum + grams(row['morning_kg']))),
+        kg(lines.fold(0, (sum, row) => sum + grams(row['night_kg']))),
+        kg(dailyProduction[date] ?? 0),
+        '',
+        '',
+        '',
+      ]);
+
+  late final List<RowData> unproducedPrograms = _unproducedPrograms();
+
+  List<RowData> _unproducedPrograms() {
+    if (request.kind != ReportKind.job) return const [];
+    final recorded = filteredEntries.map((row) => row['program_id']).toSet();
+    return programs
+        .where((program) => !recorded.contains(program['id']))
+        .toList();
+  }
+
   int _outputFor(Shift shift) => filteredEntries
       .where((row) => row['shift'] == shift.name)
       .fold(0, (total, row) => total + grams(row['quantity_kg']));
@@ -148,9 +214,21 @@ class ReportData {
   }
 }
 
-String jobStatus(RowData row) =>
-    row['completed'] == true ? 'Completed' : 'Pending';
-String shiftName(RowData row) => Shift.values.byName(row['shift']).label;
+const unproducedProgramHeaders = [
+  'DIA',
+  'Program',
+  'Loop',
+  'Specification',
+  'Ordered',
+  'Balance',
+];
+
+List<String> unproducedProgramCells(RowData row) => [
+  for (final key in ['dia', 'position', 'loop_length', 'specification'])
+    cellText(row[key]),
+  kg(grams(row['ordered_kg'])),
+  kg(grams(row['balance_kg'])),
+];
 
 const dayProgramHeaders = [
   'Job number',

@@ -81,7 +81,6 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   Shift shift = Shift.morning;
   String? jobId, partyId, dia;
   ReportRequest? request;
-  ReportRequest? previewRequest;
 
   void clearFilters() {
     scope = _ReportScope.all;
@@ -93,29 +92,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   void update(VoidCallback change) => setState(() {
     change();
     request = null;
-    previewRequest = null;
   });
 
-  void generate(ReportRequest filters) => setState(() {
-    request = filters;
-    previewRequest = filters;
-  });
-
-  void openPreview(ReportRequest filters, AsyncValue<ReportData> result) {
-    if (!identical(previewRequest, filters) ||
-        result.isLoading ||
-        !result.hasValue) {
-      return;
-    }
-    previewRequest = null;
-    final data = result.requireValue;
-    if (data.filteredEntries.isNotEmpty ||
-        (filters.kind == ReportKind.job && data.programs.isNotEmpty)) {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => PdfReportScreen(report: data)),
-      );
-    }
-  }
+  void generate(ReportRequest filters) => setState(() => request = filters);
 
   @override
   Widget build(BuildContext context) {
@@ -143,12 +122,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         ?.where((p) => p['id'] == partyId)
         .firstOrNull;
     final filters = request;
-    AsyncValue<ReportData>? snapshot;
-    if (filters != null) {
-      final provider = _reportProvider(filters);
-      ref.listen(provider, (_, result) => openPreview(filters, result));
-      snapshot = ref.watch(provider);
-    }
+    final provider = filters == null ? null : _reportProvider(filters);
+    final snapshot = provider == null ? null : ref.watch(provider);
 
     return PageBody(
       children: [
@@ -323,8 +298,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                         child: const Text('Clear Filters'),
                       ),
                     FilledButton.icon(
-                      icon: const Icon(Icons.picture_as_pdf_outlined),
-                      label: const Text('Generate PDF'),
+                      icon: const Icon(Icons.summarize_outlined),
+                      label: const Text('Generate Report'),
                       onPressed:
                           !validDates ||
                               (jobReport && pickedJob == null) ||
@@ -352,11 +327,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           ),
         ),
         if (snapshot != null)
-          loadView(snapshot, (data) => _ReportResult(data: data), () {
-            final filters = request!;
-            ref.invalidate(_reportProvider(filters));
-            generate(filters);
-          }),
+          loadView(
+            snapshot,
+            (data) => _ReportResult(data: data),
+            () => ref.invalidate(provider!),
+          ),
       ],
     );
   }
@@ -368,12 +343,10 @@ class _ReportResult extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final job = data.request.kind == ReportKind.job;
-    final range = data.request.kind == ReportKind.range;
-    final first = data.programs.firstOrNull;
-    if ((!job && data.filteredEntries.isEmpty) || (job && first == null)) {
-      return const Notice(_noProduction);
-    }
+    if (!data.hasData) return const Notice(_noProduction);
+    final job = data.request.kind == ReportKind.job
+        ? data.programs.firstOrNull
+        : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -386,7 +359,7 @@ class _ReportResult extends StatelessWidget {
                 detail: data.request.filterLabel,
                 action: FilledButton.tonalIcon(
                   icon: const Icon(Icons.picture_as_pdf_outlined),
-                  label: const Text('Open PDF'),
+                  label: const Text('Generate PDF'),
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) => PdfReportScreen(report: data),
@@ -394,156 +367,69 @@ class _ReportResult extends StatelessWidget {
                   ),
                 ),
               ),
-              if (job && first != null) ...[
+              if (job != null) ...[
                 const SizedBox(height: 9),
                 Text(
-                  '${first['party']} · Job date ${dbDateLabel(first['job_date'])}',
+                  'Job date ${dbDateLabel(job['job_date'])} · Yarn ${cellText(job['yarn'])}',
                 ),
-                Text('Yarn · ${first['yarn']}'),
               ],
               const SizedBox(height: 12),
               Wrap(
                 spacing: 7,
                 runSpacing: 7,
                 children: [
-                  ToneBadge('Ordered ${kg(data.ordered)} kg', millBlue),
-                  ToneBadge(
-                    '${job ? 'Produced' : 'Period output'} ${kg(job ? data.produced : data.period)} kg',
-                    runningGreen,
-                  ),
-                  ToneBadge(
-                    'Balance ${kg(data.balance)} kg',
-                    data.balance > 0 ? pendingAmber : runningGreen,
-                  ),
-                  if (job)
-                    ToneBadge(
-                      'Completion ${percent(data.produced, data.ordered)}',
-                      millBlue,
-                    ),
-                  if (range) ...[
-                    ToneBadge('Morning ${kg(data.morning)} kg', millBlue),
-                    ToneBadge('Night ${kg(data.night)} kg', millBlue),
-                  ],
-                  if (job && first != null)
-                    ToneBadge(
-                      data.programs.every((p) => p['completed'] == true)
-                          ? 'Job completed'
-                          : 'Job pending',
-                      data.programs.every((p) => p['completed'] == true)
-                          ? runningGreen
-                          : pendingAmber,
-                    ),
+                  for (final (label, value) in data.productionSummary)
+                    ToneBadge('$label · $value', millBlue),
                 ],
               ),
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        if (range)
+        if (data.productionDays.isNotEmpty) ...[
+          const SizedBox(height: 12),
           _ReportTable(
             title: 'Date-wise production (kg)',
-            columns: const ['Date', ...dayProgramHeaders],
+            columns: ['Date', ...data.productionColumns(dayProgramHeaders)],
             records: [
-              for (final day in data.productionDays.entries)
+              for (final day in data.productionDays.entries) ...[
                 for (final line in day.value)
-                  [dbDateLabel(day.key), ...dayProgramCells(line)],
-            ],
-            numericFrom: 7,
-          ),
-        if (!range && data.byDia.isNotEmpty) ...[
-          _ReportTable(
-            title: 'DIA totals (kg)',
-            columns: const ['DIA', 'Day', 'Night', 'Total'],
-            records: [
-              for (final dia in sortedDias(data.byDia.keys))
-                if (data.byDia[dia] case final output?)
                   [
-                    dia,
-                    kg(output.$1),
-                    kg(output.$2),
-                    kg(output.$1 + output.$2),
+                    dbDateLabel(day.key),
+                    ...data.productionColumns(dayProgramCells(line)),
                   ],
-            ],
-            numericFrom: 1,
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (!range && first != null) ...[
-          _ReportTable(
-            title: 'Program quantities (kg)',
-            detail: job
-                ? null
-                : 'Produced and balance are as of the report end date. Period shows output within the selected filters.',
-            columns: [
-              'Job',
-              'Party',
-              'Yarn',
-              'DIA',
-              'Program',
-              'Loop',
-              'Design',
-              'Remarks',
-              'Ordered',
-              if (!job) 'Period',
-              'Produced',
-              'Balance',
-              'Completion',
-              'Status',
-            ],
-            records: [
-              for (final row in data.programs)
                 [
-                  for (final field in [
-                    'job_number',
-                    'party',
-                    'yarn',
-                    'dia',
-                    'position',
-                    'loop_length',
-                    'specification',
-                    'remarks',
-                  ])
-                    cellText(row[field]),
-                  kg(grams(row['ordered_kg'])),
-                  if (!job) kg(grams(row['period_kg'])),
-                  kg(grams(row['produced_kg'])),
-                  kg(grams(row['balance_kg'])),
-                  percent(grams(row['produced_kg']), grams(row['ordered_kg'])),
-                  jobStatus(row),
+                  dbDateLabel(day.key),
+                  ...data.subtotalCells(day.key, day.value),
                 ],
-            ],
-            numericFrom: 8,
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (!range && data.filteredEntries.isNotEmpty)
-          _ReportTable(
-            title: 'Production history',
-            columns: const [
-              'Date',
-              'Shift',
-              'Job',
-              'Party',
-              'DIA',
-              'Program',
-              'Design',
-              'Output (kg)',
-            ],
-            records: [
-              for (final row in data.filteredEntries)
-                [
-                  dbDateLabel(row['production_date']),
-                  shiftName(row),
-                  cellText(row['job_number']),
-                  cellText(row['party']),
-                  cellText(row['dia']),
-                  cellText(row['program_position']),
-                  cellText(row['specification']),
-                  kg(grams(row['quantity_kg'])),
-                ],
+              ],
             ],
             numericFrom: 7,
           ),
+        ],
+        if (data.unproducedPrograms.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _ReportTable(
+            title: 'Programs without recorded production (kg)',
+            columns: unproducedProgramHeaders,
+            records: data.unproducedPrograms
+                .map(unproducedProgramCells)
+                .toList(),
+            numericFrom: 4,
+          ),
+        ],
+        const SizedBox(height: 12),
+        Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${data.totalLabel} · ${kg(data.period)} kg',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              Text(data.balanceLabel),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -555,10 +441,8 @@ class _ReportTable extends StatefulWidget {
     required this.columns,
     required this.records,
     required this.numericFrom,
-    this.detail,
   });
   final String title;
-  final String? detail;
   final List<String> columns;
   final List<List<String>> records;
   final int numericFrom;
@@ -591,7 +475,6 @@ class _ReportTableState extends State<_ReportTable> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(widget.title, style: theme.textTheme.titleLarge),
-          if (widget.detail != null) Text(widget.detail!),
           const SizedBox(height: 10),
           Scrollbar(
             controller: scroll,
@@ -717,7 +600,7 @@ class _PdfReportScreenState extends State<PdfReportScreen> {
           await Printing.layoutPdf(
             name: name,
             onLayout: (_) => file,
-            format: reportFormat(widget.report.request.kind),
+            format: reportFormat,
             dynamicLayout: false,
           );
         case _PdfAction.share:
@@ -807,7 +690,7 @@ class _PdfReportScreenState extends State<PdfReportScreen> {
                   canDebug: false,
                   canChangeOrientation: false,
                   canChangePageFormat: false,
-                  initialPageFormat: reportFormat(widget.report.request.kind),
+                  initialPageFormat: reportFormat,
                   maxPageWidth: 1040,
                   onError: (context, error) => const Center(
                     child: Text(

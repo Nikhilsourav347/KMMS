@@ -75,8 +75,8 @@ void main() {
                 {
                   ...entries[i],
                   'morning_kg': '1.125',
-                  'night_kg': '1.125',
-                  'daily_kg': '2.25',
+                  'night_kg': kind == ReportKind.shift ? 0 : '1.125',
+                  'daily_kg': kind == ReportKind.shift ? '1.125' : '2.25',
                   'ordered_kg': 500,
                   'cumulative_kg': '9.975',
                   'balance_kg': '490.025',
@@ -91,6 +91,11 @@ void main() {
           grams('37.125'),
           kind == ReportKind.shift ? 0 : grams('37.125'),
         ));
+        expect(data.unproducedPrograms, isEmpty);
+        expect(
+          data.productionColumns(dayProgramHeaders).contains('Night'),
+          kind != ReportKind.shift,
+        );
         expect(request.filename, switch (kind) {
           ReportKind.job => 'UKM_Job_QA-001_Production_Report.pdf',
           ReportKind.daily => 'UKM_Daily_Report_2026-11-25.pdf',

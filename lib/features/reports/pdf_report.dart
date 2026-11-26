@@ -27,8 +27,7 @@ final _columnTitle = pw.TextStyle(
   color: PdfColors.white,
 );
 
-PdfPageFormat reportFormat(ReportKind kind) =>
-    kind == ReportKind.job ? PdfPageFormat.a4 : PdfPageFormat.a4.landscape;
+final reportFormat = PdfPageFormat.a4.landscape;
 
 pw.Table _table(
   List<String> headers,
@@ -102,19 +101,22 @@ pw.Widget _total(String label, int amount) => pw.Container(
   ),
 );
 
-List<pw.Widget> _dateSections(ReportData report) => [
+List<pw.Widget> _reportSections(ReportData report) => [
+  if ((report.request.kind == ReportKind.job
+          ? report.programs.firstOrNull
+          : null)
+      case final first?) ...[
+    pw.Text(
+      'Job date ${dbDateLabel(first['job_date'])}  ·  Yarn ${cellText(first['yarn'])}',
+      style: _body,
+    ),
+    pw.SizedBox(height: 8),
+  ],
   pw.Wrap(
     spacing: 7,
     runSpacing: 7,
     children: [
-      for (final (label, value) in [
-        ('Period production', '${kg(report.period)} kg'),
-        ('Jobs', '${report.jobCount}'),
-        ('Production days', '${report.productionDays.length}'),
-        ('Distinct DIA', '${report.byDia.length}'),
-        ('Morning shift', '${kg(report.morning)} kg'),
-        ('Night shift', '${kg(report.night)} kg'),
-      ])
+      for (final (label, value) in report.productionSummary)
         pw.Container(
           width: 117,
           padding: const pw.EdgeInsets.all(9),
@@ -134,150 +136,51 @@ List<pw.Widget> _dateSections(ReportData report) => [
     pw.NewPage(freeSpace: 113),
     _heading('${dbDateLabel(day.key)}  |  Production (kg)'),
     _table(
-      [
+      report.productionColumns([
         '${dayProgramHeaders.first}\n${dbDateLabel(day.key)}',
         ...dayProgramHeaders.skip(1),
-      ],
-      day.value.map(dayProgramCells),
-      [1.25, 1.65, .82, .7, .6, 1.65, .83, .8, .88, .9, .95, .9],
+      ]),
+      day.value.map((row) => report.productionColumns(dayProgramCells(row))),
+      report.productionColumns([
+        1.25,
+        1.65,
+        .82,
+        .7,
+        .6,
+        1.65,
+        .83,
+        .8,
+        .88,
+        .9,
+        .95,
+        .9,
+      ]),
       numericFrom: 6,
-      subtotal: [
-        'Daily subtotal',
-        if (report.request.dia case final dia?) 'DIA $dia' else '',
-        '',
-        '',
-        '',
-        '',
-        kg(day.value.fold(0, (sum, row) => sum + grams(row['morning_kg']))),
-        kg(day.value.fold(0, (sum, row) => sum + grams(row['night_kg']))),
-        kg(report.dailyProduction[day.key]!),
-        '',
-        '',
-        '',
-      ],
+      subtotal: report.subtotalCells(day.key, day.value),
+    ),
+  ],
+  if (report.unproducedPrograms.isNotEmpty) ...[
+    pw.NewPage(freeSpace: 95),
+    _heading('Programs without recorded production (kg)'),
+    _table(
+      unproducedProgramHeaders,
+      report.unproducedPrograms.map(unproducedProgramCells),
+      [1, .8, .8, 2, 1, 1],
+      numericFrom: 4,
     ),
   ],
   pw.NewPage(freeSpace: 64),
   pw.SizedBox(height: 13),
-  _total(
-    report.request.kind == ReportKind.range
-        ? report.request.dia == null
-              ? 'Grand total for selected date range'
-              : 'Grand total for DIA ${report.request.dia}'
-        : 'Total production for selected date',
-    report.period,
-  ),
+  _total(report.totalLabel, report.period),
   pw.Padding(
     padding: const pw.EdgeInsets.only(top: 8),
-    child: pw.Text(
-      'Program balances as of ${prettyDate(report.request.end!)}  |  '
-      'Ordered ${kg(report.ordered)} kg  ·  Remaining ${kg(report.balance)} kg',
-      style: _bold,
-    ),
+    child: pw.Text(report.balanceLabel, style: _bold),
   ),
-];
-
-List<pw.Widget> _jobSections(ReportData report) => [
-  if (report.programs.firstOrNull case final first?) ...[
-    pw.Text(
-      'Job date ${dbDateLabel(first['job_date'])}  ·  Yarn ${cellText(first['yarn'])}',
-      style: _body,
-    ),
-    _heading('Program summary (kg)'),
-    _table(
-      [
-        'Program',
-        'DIA',
-        'Loop',
-        'Specification',
-        'Ordered',
-        'Produced',
-        'Balance',
-      ],
-      [
-        for (final row in report.programs)
-          [
-            cellText(row['position']),
-            cellText(row['dia']),
-            cellText(row['loop_length']),
-            cellText(row['specification']),
-            kg(grams(row['ordered_kg'])),
-            kg(grams(row['produced_kg'])),
-            kg(grams(row['balance_kg'])),
-          ],
-      ],
-      [.7, .9, .7, 1.8, .85, .9, .85],
-      numericFrom: 4,
-    ),
-  ],
-  if (report.filteredEntries.isNotEmpty) ...[
-    pw.NewPage(freeSpace: 88),
-    _heading('Production history (kg)'),
-    _table(
-      [
-        'Date',
-        'Shift',
-        'DIA',
-        'Program',
-        'Loop',
-        'Specification',
-        'Production',
-      ],
-      [
-        for (final row in report.filteredEntries)
-          [
-            dbDateLabel(row['production_date']),
-            shiftName(row),
-            cellText(row['dia']),
-            cellText(row['program_position']),
-            cellText(row['loop_length']),
-            cellText(row['specification']),
-            kg(grams(row['quantity_kg'])),
-          ],
-      ],
-      [1.15, .7, .9, .7, .65, 1.75, .9],
-      numericFrom: 6,
-    ),
-  ] else
-    pw.Text('No production has been recorded for this job.', style: _body),
-  pw.SizedBox(height: 12),
-  _total('Total production', report.produced),
-];
-
-List<pw.Widget> _shiftSections(ReportData report) => [
-  _heading('Production recorded for this shift (kg)'),
-  _table(
-    [
-      'Job number',
-      'Party name',
-      'DIA',
-      'Program',
-      'Loop',
-      'Specification',
-      'Production',
-    ],
-    [
-      for (final row in report.filteredEntries)
-        [
-          cellText(row['job_number']),
-          cellText(row['party']),
-          cellText(row['dia']),
-          cellText(row['program_position']),
-          cellText(row['loop_length']),
-          cellText(row['specification']),
-          kg(grams(row['quantity_kg'])),
-        ],
-    ],
-    [1.15, 1.7, .9, .75, .65, 1.7, 1],
-    numericFrom: 6,
-  ),
-  pw.SizedBox(height: 12),
-  _total('Total production for selected shift', report.period),
 ];
 
 Future<Uint8List> buildReportPdf(ReportData report) async {
   final request = report.request;
-  if (request.kind != ReportKind.job && report.filteredEntries.isEmpty) {
+  if (!report.hasData) {
     throw StateError('No production records found for the selected filters.');
   }
   final image = await rootBundle.load(logoAsset);
@@ -315,7 +218,7 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
     pw.MultiPage(
       // A data-derived ceiling guards against a layout error in debug builds.
       maxPages: 8 + report.filteredEntries.length * 2 + report.programs.length,
-      pageFormat: reportFormat(request.kind),
+      pageFormat: reportFormat,
       margin: const pw.EdgeInsets.fromLTRB(34, 28, 34, 28),
       header: (_) => pw.Container(
         margin: const pw.EdgeInsets.only(bottom: 12),
@@ -376,11 +279,7 @@ Future<Uint8List> buildReportPdf(ReportData report) async {
           style: _body,
         ),
         pw.SizedBox(height: 10),
-        ...switch (request.kind) {
-          ReportKind.job => _jobSections(report),
-          ReportKind.daily || ReportKind.range => _dateSections(report),
-          ReportKind.shift => _shiftSections(report),
-        },
+        ..._reportSections(report),
       ],
     ),
   );
