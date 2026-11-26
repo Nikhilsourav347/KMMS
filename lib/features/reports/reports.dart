@@ -406,15 +406,74 @@ class _ReportResult extends StatelessWidget {
             numericFrom: 7,
           ),
         ],
-        if (data.unproducedPrograms.isNotEmpty) ...[
+        if (data.programs.isNotEmpty) ...[
           const SizedBox(height: 12),
           _ReportTable(
-            title: 'Programs without recorded production (kg)',
-            columns: unproducedProgramHeaders,
-            records: data.unproducedPrograms
-                .map(unproducedProgramCells)
-                .toList(),
-            numericFrom: 4,
+            title: 'Production Quantities (kg)',
+            columns: const [
+              'Job',
+              'Party',
+              'DIA',
+              'Program',
+              'Loop',
+              'Specification',
+              'Ordered',
+              'Produced in report',
+              'Remaining balance',
+            ],
+            records: [
+              for (final row in data.programs)
+                [
+                  for (final field in [
+                    'job_number',
+                    'party',
+                    'dia',
+                    'position',
+                    'loop_length',
+                    'specification',
+                  ])
+                    cellText(row[field]),
+                  kg(grams(row['ordered_kg'])),
+                  kg(grams(row['period_kg'])),
+                  kg(grams(row['balance_kg'])),
+                ],
+            ],
+            numericFrom: 6,
+          ),
+        ],
+        if (data.filteredEntries.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _ReportTable(
+            title: 'Production History',
+            columns: const [
+              'Date',
+              'Shift',
+              'Job',
+              'Party',
+              'DIA',
+              'Program',
+              'Loop',
+              'Specification',
+              'Production (kg)',
+            ],
+            records: [
+              for (final row in data.filteredEntries)
+                [
+                  dbDateLabel(row['production_date']),
+                  Shift.values.byName(row['shift']).label,
+                  for (final field in [
+                    'job_number',
+                    'party',
+                    'dia',
+                    'program_position',
+                    'loop_length',
+                    'specification',
+                  ])
+                    cellText(row[field]),
+                  kg(grams(row['quantity_kg'])),
+                ],
+            ],
+            numericFrom: 8,
           ),
         ],
         const SizedBox(height: 12),

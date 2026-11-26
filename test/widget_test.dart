@@ -72,6 +72,7 @@ class _ProductionFixture implements MillData {
       'loop_length': 2.65,
       'specification': 'Export fixture design',
       'ordered_kg': 100,
+      'period_kg': 20,
       'balance_kg': 80,
       'job_date': isoDate(indiaToday()),
     };
@@ -670,7 +671,10 @@ void main() {
         await tester.tap(generate);
         await tester.pumpAndSettle();
         expect(find.text('Date-wise production (kg)'), findsOneWidget);
-        expect(find.text('30A'), findsOneWidget);
+        expect(find.text('30A'), findsNWidgets(3));
+        expect(find.text('Production Quantities (kg)'), findsOneWidget);
+        expect(find.text('Production History'), findsOneWidget);
+        expect(find.text('Produced in report'), findsOneWidget);
         expect(find.text('Daily subtotal'), findsOneWidget);
         expect(find.text('PDF preview'), findsNothing);
         expect(export, findsOneWidget);
@@ -697,6 +701,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(export, findsNothing);
         expect(find.text('Date-wise production (kg)'), findsNothing);
+        expect(find.text('Production History'), findsNothing);
       },
     );
   }
