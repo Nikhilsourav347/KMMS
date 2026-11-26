@@ -12,8 +12,8 @@ select public.ukm_save_machine_label(null, 'test-007-number', '34', '', '');
 
 do $$
 begin
-  if not exists (select from public.machines where number='test-007-number' and dia=34 and dia_label is null)
-     or not exists (select from public.machines where number='test-007-label' and dia is null and dia_label='26A') then
+  if not exists (select from public.machines where number='test-007-number' and dia='34')
+     or not exists (select from public.machines where number='test-007-label' and dia='26A') then
     raise exception 'Numeric or lettered DIA was stored incorrectly.';
   end if;
 end;
@@ -31,9 +31,10 @@ begin
   perform public.ukm_set_running(machine, current_date, true);
   perform public.ukm_set_booking(machine, current_date, true);
   if not exists (select from jsonb_array_elements(public.ukm_machine_day(current_date)) x
-      where x->>'dia_label'='26A' and x->>'running'='true')
+      where x->>'dia'='26A' and x->>'running'='true')
      or not exists (select from jsonb_array_elements(public.ukm_calendar(current_date, current_date)) x
-      where x->>'dia_label'='26A' and (x->'booked_dates') ? current_date::text) then
+      where x->>'dia'='26A' and (x->'booked_dates') ? current_date::text)
+     or not exists (select from public.schedules where machine_id=machine and dia='26A') then
     raise exception 'The label did not reach machine status or the booked schedule.';
   end if;
   perform public.ukm_set_booking(machine, current_date, false);

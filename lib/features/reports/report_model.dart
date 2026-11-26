@@ -26,8 +26,7 @@ class ReportRequest {
   final ReportKind kind;
   final DateTime? start, end;
   final Shift? shift;
-  final String? jobId, jobNumber, partyId, partyName;
-  final int? dia;
+  final String? jobId, jobNumber, partyId, partyName, dia;
 
   String get filterLabel => [
     if (start != null && (end == null || start == end)) prettyDate(start!),
@@ -51,7 +50,7 @@ class ReportRequest {
       ReportKind.shift =>
         'UKM_${shift!.label}_Shift_Report_${isoDate(start!)}.pdf',
       ReportKind.range =>
-        'UKM_Job_${safe(jobNumber!)}_${isoDate(start!)}_to_${isoDate(end!)}.pdf',
+        'UKM_${jobNumber == null ? 'Date_Range' : 'Job_${safe(jobNumber!)}'}_${isoDate(start!)}_to_${isoDate(end!)}.pdf',
     };
   }
 }
@@ -63,9 +62,10 @@ class ReportData {
     required this.generated,
     required this.reference,
   }) : programs = rows(payload['programs']),
-       entries = rows(payload['entries']);
+       entries = rows(payload['entries']),
+       _programDays = rows(payload['days']);
   final ReportRequest request;
-  final List<RowData> programs, entries;
+  final List<RowData> programs, entries, _programDays;
   final DateTime generated;
   final String reference;
 
@@ -74,23 +74,52 @@ class ReportData {
   int get ordered => sumPrograms('ordered_kg');
   int get produced => sumPrograms('produced_kg');
   int get balance => sumPrograms('balance_kg');
-  int get period => sumPrograms('period_kg');
-  List<RowData> get filteredEntries {
+  int get period => morning + night;
+  int get morning => _outputFor(Shift.morning);
+  int get night => _outputFor(Shift.night);
+  int get jobCount => filteredEntries
+      .map((row) => row['job_id'] ?? row['job_number'])
+      .toSet()
+      .length;
+
+  int _outputFor(Shift shift) => filteredEntries
+      .where((row) => row['shift'] == shift.name)
+      .fold(0, (total, row) => total + grams(row['quantity_kg']));
+
+  late final filteredEntries = entries.where(_matches).toList();
+
+  bool _matches(RowData row) {
     final start = request.start == null ? null : isoDate(request.start!);
     final end = request.end == null ? null : isoDate(request.end!);
-    return entries.where((row) {
-      final date = row['production_date'] as String;
-      final matchesJob = request.jobId != null && row['job_id'] != null
-          ? row['job_id'] == request.jobId
-          : request.jobNumber == null || row['job_number'] == request.jobNumber;
-      return (start == null || date.compareTo(start) >= 0) &&
-          (end == null || date.compareTo(end) <= 0) &&
-          (request.shift == null || row['shift'] == request.shift!.name) &&
-          matchesJob;
-    }).toList();
+    final date = row['production_date'] as String;
+    final matchesJob = request.jobId != null && row['job_id'] != null
+        ? row['job_id'] == request.jobId
+        : request.jobNumber == null || row['job_number'] == request.jobNumber;
+    return (start == null || date.compareTo(start) >= 0) &&
+        (end == null || date.compareTo(end) <= 0) &&
+        (request.shift == null ||
+            row['shift'] == null ||
+            row['shift'] == request.shift!.name) &&
+        (request.partyId == null || row['party_id'] == request.partyId) &&
+        (request.dia == null || row['dia']?.toString() == request.dia) &&
+        matchesJob;
   }
 
-  Map<String, int> get dailyProduction {
+  late final productionDays = _groupProductionDays();
+
+  Map<String, List<RowData>> _groupProductionDays() {
+    final grouped = <String, List<RowData>>{};
+    for (final row in _programDays.where(_matches)) {
+      grouped.putIfAbsent(row['production_date'] as String, () => []).add(row);
+    }
+    return {
+      for (final date in grouped.keys.toList()..sort()) date: grouped[date]!,
+    };
+  }
+
+  late final dailyProduction = _dailyTotals();
+
+  Map<String, int> _dailyTotals() {
     final totals = <String, int>{};
     for (final entry in filteredEntries) {
       final date = entry['production_date'] as String;
@@ -103,10 +132,12 @@ class ReportData {
     return totals;
   }
 
-  Map<int, (int, int)> get byDia {
-    final totals = <int, (int, int)>{};
-    for (final row in entries) {
-      final dia = row['dia'] as int;
+  late final byDia = _diaTotals();
+
+  Map<String, (int, int)> _diaTotals() {
+    final totals = <String, (int, int)>{};
+    for (final row in filteredEntries) {
+      final dia = row['dia'].toString();
       final (morning, night) = totals[dia] ?? (0, 0);
       final output = grams(row['quantity_kg']);
       totals[dia] = row['shift'] == Shift.morning.name
@@ -120,3 +151,39 @@ class ReportData {
 String jobStatus(RowData row) =>
     row['completed'] == true ? 'Completed' : 'Pending';
 String shiftName(RowData row) => Shift.values.byName(row['shift']).label;
+
+const dayProgramHeaders = [
+  'Job number',
+  'Party name',
+  'DIA',
+  'Program',
+  'Loop',
+  'Specification',
+  'Morning',
+  'Night',
+  'Daily total',
+  'Ordered',
+  'Cumulative',
+  'Balance',
+];
+
+List<String> dayProgramCells(RowData row) => [
+  for (final key in [
+    'job_number',
+    'party',
+    'dia',
+    'program_position',
+    'loop_length',
+    'specification',
+  ])
+    cellText(row[key]),
+  for (final key in [
+    'morning_kg',
+    'night_kg',
+    'daily_kg',
+    'ordered_kg',
+    'cumulative_kg',
+    'balance_kg',
+  ])
+    kg(grams(row[key])),
+];

@@ -238,6 +238,7 @@ class SearchPicker extends StatelessWidget {
     required this.onChanged,
     this.enabled = true,
     this.allowClear = true,
+    this.placeholder,
   });
   final String label;
   final Map<String, String> options;
@@ -245,6 +246,7 @@ class SearchPicker extends StatelessWidget {
   final ValueChanged<String?> onChanged;
   final bool enabled;
   final bool allowClear;
+  final String? placeholder;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -252,7 +254,10 @@ class SearchPicker extends StatelessWidget {
       Expanded(
         child: OutlinedButton.icon(
           icon: const Icon(Icons.search, size: 19),
-          label: Text(options[value] ?? label, overflow: TextOverflow.ellipsis),
+          label: Text(
+            options[value] ?? placeholder ?? label,
+            overflow: TextOverflow.ellipsis,
+          ),
           onPressed: !enabled
               ? null
               : () async {

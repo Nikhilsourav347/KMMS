@@ -102,7 +102,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
         type: values[2],
         specifications: values[3],
       );
-      if (mounted) ref.invalidate(_profileMachines);
+      if (mounted) ref.invalidate(registeredMachinesProvider);
     },
   );
 
@@ -118,7 +118,7 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
     try {
       final deleted = await repository.removeMachine(machine['id']);
       if (mounted) {
-        ref.invalidate(_profileMachines);
+        ref.invalidate(registeredMachinesProvider);
         notify(
           context,
           deleted
@@ -187,9 +187,9 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
               ),
               if (admin)
                 loadView(
-                  ref.watch(_profileMachines),
+                  ref.watch(registeredMachinesProvider),
                   _machineRegister,
-                  () => ref.invalidate(_profileMachines),
+                  () => ref.invalidate(registeredMachinesProvider),
                 ),
             ],
           );
@@ -379,11 +379,6 @@ class _ProfileState extends ConsumerState<ProfileScreen> {
     ),
   );
 }
-
-final _profileMachines = FutureProvider.autoDispose<List<RowData>>((ref) {
-  ref.watch(revisionsProvider(Dataset.machines));
-  return ref.watch(repositoryProvider).registeredMachines();
-});
 
 class _EditDialog extends StatefulWidget {
   const _EditDialog({

@@ -15,13 +15,15 @@ import 'pdf_report.dart';
 import 'report_model.dart';
 
 final _partiesProvider = FutureProvider.autoDispose<List<RowData>>((ref) {
-  ref.watch(revisionsProvider(Dataset.jobs));
+  ref.watch(revisionsProvider(Dataset.jobs).select((update) => update.value));
   return ref.read(repositoryProvider).names('parties');
 });
 
 final _reportProvider = FutureProvider.autoDispose
     .family<ReportData, ReportRequest>((ref, filters) async {
-      ref.watch(revisionsProvider(Dataset.production));
+      ref.watch(
+        revisionsProvider(Dataset.production).select((update) => update.value),
+      );
       final result = await ref
           .read(repositoryProvider)
           .report(
@@ -52,48 +54,102 @@ class ReportsScreen extends ConsumerStatefulWidget {
   ConsumerState<ReportsScreen> createState() => _ReportsScreenState();
 }
 
+final _periodDiasProvider = FutureProvider.autoDispose
+    .family<List<String>, (DateTime, DateTime)>((ref, period) {
+      ref.watch(
+        revisionsProvider(Dataset.production).select((update) => update.value),
+      );
+      return ref.watch(repositoryProvider).reportDias(period.$1, period.$2);
+    });
+
+enum _ReportScope {
+  all('All Jobs and Parties'),
+  job('Filter by Job Number'),
+  party('Filter by Party Name');
+
+  const _ReportScope(this.label);
+  final String label;
+}
+
+const _noProduction = 'No production records found for the selected filters.';
+
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   ReportKind kind = ReportKind.job;
+  _ReportScope scope = _ReportScope.all;
   DateTime start = indiaToday();
   DateTime end = indiaToday();
   Shift shift = Shift.morning;
-  String? jobId;
-  String? partyId;
-  int? dia;
+  String? jobId, partyId, dia;
   ReportRequest? request;
+  ReportRequest? previewRequest;
 
-  void selectReport(ReportKind value) {
-    if (kind == value) return;
-    setState(() {
-      kind = value;
-      request = null;
-      jobId = null;
-      partyId = null;
-      dia = null;
-    });
+  void clearFilters() {
+    scope = _ReportScope.all;
+    jobId = null;
+    partyId = null;
+    dia = null;
   }
 
   void update(VoidCallback change) => setState(() {
     change();
     request = null;
+    previewRequest = null;
   });
+
+  void generate(ReportRequest filters) => setState(() {
+    request = filters;
+    previewRequest = filters;
+  });
+
+  void openPreview(ReportRequest filters, AsyncValue<ReportData> result) {
+    if (!identical(previewRequest, filters) ||
+        result.isLoading ||
+        !result.hasValue) {
+      return;
+    }
+    previewRequest = null;
+    final data = result.requireValue;
+    if (data.filteredEntries.isNotEmpty ||
+        (filters.kind == ReportKind.job && data.programs.isNotEmpty)) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => PdfReportScreen(report: data)),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final jobs = ref.watch(jobsProvider);
-    final parties = kind == ReportKind.range
+    final range = kind == ReportKind.range;
+    final jobReport = kind == ReportKind.job;
+    final useJob = jobReport || (range && scope == _ReportScope.job);
+    final useParty = range && scope == _ReportScope.party;
+    final validDates = !range || !start.isAfter(end);
+    final jobs = useJob
+        ? ref.watch(jobsProvider)
+        : const AsyncData(<RowData>[]);
+    final parties = useParty
         ? ref.watch(_partiesProvider)
         : const AsyncData(<RowData>[]);
-    final snapshot = request == null
-        ? null
-        : ref.watch(_reportProvider(request!));
-    final usesJobs = kind == ReportKind.job || kind == ReportKind.range;
-    final pickedJob = usesJobs
-        ? jobs.value?.where((j) => j['id'] == jobId).firstOrNull
-        : null;
+    final rangeKey = (start, end);
+    final active = range
+        ? ref.watch(activeDiasProvider)
+        : const AsyncData(<String>[]);
+    final historical = range && validDates
+        ? ref.watch(_periodDiasProvider(rangeKey))
+        : const AsyncData(<String>[]);
+    final diaChoices = sortedDias([...?active.value, ...?historical.value]);
+    final pickedJob = jobs.value?.where((j) => j['id'] == jobId).firstOrNull;
     final pickedParty = parties.value
         ?.where((p) => p['id'] == partyId)
         .firstOrNull;
+    final filters = request;
+    AsyncValue<ReportData>? snapshot;
+    if (filters != null) {
+      final provider = _reportProvider(filters);
+      ref.listen(provider, (_, result) => openPreview(filters, result));
+      snapshot = ref.watch(provider);
+    }
+
     return PageBody(
       children: [
         const SectionTitle(
@@ -112,33 +168,35 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                     ChoiceChip(
                       label: Text(option.label),
                       selected: kind == option,
-                      onSelected: (_) => selectReport(option),
+                      onSelected: (_) {
+                        if (kind != option) {
+                          update(() {
+                            kind = option;
+                            clearFilters();
+                          });
+                        }
+                      },
                     ),
                 ],
               ),
               const SizedBox(height: 14),
-              if (kind != ReportKind.job)
+              if (!jobReport)
                 Wrap(
                   spacing: 9,
                   runSpacing: 9,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     DateField(
-                      kind == ReportKind.range ? 'From' : 'Production date',
+                      range ? 'From Date' : 'Production date',
                       start,
-                      (date) => update(() {
-                        start = date;
-                        if (start.isAfter(end)) end = start;
-                      }),
-                      last: indiaToday(),
+                      (date) => update(() => start = date),
+                      last: range ? null : indiaToday(),
                     ),
-                    if (kind == ReportKind.range)
+                    if (range)
                       DateField(
-                        'To',
+                        'To Date',
                         end,
                         (date) => update(() => end = date),
-                        first: start,
-                        last: indiaToday(),
                       ),
                     if (kind == ReportKind.shift)
                       SegmentedButton<Shift>(
@@ -155,7 +213,34 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                       ),
                   ],
                 ),
-              if (usesJobs) ...[
+              if (!validDates) ...[
+                const SizedBox(height: 8),
+                const Notice('From Date must be on or before To Date.'),
+              ],
+              if (range) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    for (final value in _ReportScope.values)
+                      ChoiceChip(
+                        label: Text(value.label),
+                        selected: scope == value,
+                        onSelected: (_) {
+                          if (scope != value) {
+                            update(() {
+                              scope = value;
+                              jobId = null;
+                              partyId = null;
+                            });
+                          }
+                        },
+                      ),
+                  ],
+                ),
+              ],
+              if (useJob) ...[
                 const SizedBox(height: 10),
                 loadView(
                   jobs,
@@ -164,19 +249,24 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                     value: jobId,
                     options: {
                       for (final j in results)
-                        j['id'] as String: '${j['job_number']} · ${j['party']}',
+                        j['id'] as String: j['job_number'] as String,
                     },
                     onChanged: (value) => update(() => jobId = value),
                   ),
                   () => ref.invalidate(jobsProvider),
                 ),
+                if (pickedJob != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text('Party · ${pickedJob['party']}'),
+                  ),
               ],
-              if (kind == ReportKind.range) ...[
-                const SizedBox(height: 9),
+              if (useParty) ...[
+                const SizedBox(height: 10),
                 loadView(
                   parties,
                   (results) => SearchPicker(
-                    label: 'Filter by party (optional)',
+                    label: 'Select party name',
                     value: partyId,
                     options: {
                       for (final p in results)
@@ -186,72 +276,87 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   ),
                   () => ref.invalidate(_partiesProvider),
                 ),
-                const SizedBox(height: 9),
+              ],
+              if (range) ...[
+                const SizedBox(height: 10),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: SizedBox(
-                    width: 230,
-                    child: DropdownButtonFormField<int>(
-                      key: ValueKey(dia),
-                      initialValue: dia ?? 0,
-                      decoration: const InputDecoration(labelText: 'DIA'),
-                      items: [
-                        const DropdownMenuItem(
-                          value: 0,
-                          child: Text('All DIA values'),
-                        ),
-                        for (final value in dias)
-                          DropdownMenuItem(
-                            value: value,
-                            child: Text('DIA $value'),
-                          ),
-                      ],
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 300),
+                    child: SearchPicker(
+                      label: 'Filter by DIA',
+                      value: dia ?? '',
+                      options: {
+                        '': 'All DIA',
+                        if (dia != null && !diaChoices.contains(dia))
+                          dia!: dia!,
+                        for (final value in diaChoices) value: value,
+                      },
+                      allowClear: false,
                       onChanged: (value) =>
-                          update(() => dia = value == 0 ? null : value),
+                          update(() => dia = value == '' ? null : value),
                     ),
                   ),
                 ),
+                if (historical.hasError || active.hasError)
+                  Notice(
+                    'Some DIA options could not be loaded.',
+                    action: TextButton(
+                      onPressed: () {
+                        ref.invalidate(_periodDiasProvider(rangeKey));
+                        ref.invalidate(registeredMachinesProvider);
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ),
               ],
               const SizedBox(height: 13),
               Align(
                 alignment: Alignment.centerRight,
-                child: FilledButton.icon(
-                  icon: const Icon(Icons.bar_chart),
-                  label: const Text('Generate report'),
-                  onPressed:
-                      (usesJobs && pickedJob == null) ||
-                          (jobId != null && pickedJob == null) ||
-                          (partyId != null && pickedParty == null) ||
-                          snapshot?.isLoading == true
-                      ? null
-                      : () => setState(() {
-                          request = ReportRequest(
-                            kind: kind,
-                            start: kind == ReportKind.job ? null : start,
-                            end: kind == ReportKind.job
-                                ? null
-                                : kind == ReportKind.range
-                                ? end
-                                : start,
-                            shift: kind == ReportKind.shift ? shift : null,
-                            jobId: pickedJob?['id'],
-                            jobNumber: pickedJob?['job_number'],
-                            partyId: pickedParty?['id'],
-                            partyName: pickedParty?['name'],
-                            dia: dia,
-                          );
-                        }),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (range)
+                      TextButton(
+                        onPressed: () => update(clearFilters),
+                        child: const Text('Clear Filters'),
+                      ),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.picture_as_pdf_outlined),
+                      label: const Text('Generate PDF'),
+                      onPressed:
+                          !validDates ||
+                              (jobReport && pickedJob == null) ||
+                              snapshot?.isLoading == true
+                          ? null
+                          : () => generate(
+                              ReportRequest(
+                                kind: kind,
+                                start: jobReport ? null : start,
+                                end: jobReport ? null : (range ? end : start),
+                                shift: kind == ReportKind.shift ? shift : null,
+                                jobId: pickedJob?['id'],
+                                jobNumber: pickedJob?['job_number'],
+                                partyId: pickedParty?['id'],
+                                partyName:
+                                    pickedParty?['name'] ?? pickedJob?['party'],
+                                dia: range ? dia : null,
+                              ),
+                            ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
         ),
         if (snapshot != null)
-          loadView(
-            snapshot,
-            (data) => _ReportResult(data: data),
-            () => ref.invalidate(_reportProvider(request!)),
-          ),
+          loadView(snapshot, (data) => _ReportResult(data: data), () {
+            final filters = request!;
+            ref.invalidate(_reportProvider(filters));
+            generate(filters);
+          }),
       ],
     );
   }
@@ -264,7 +369,11 @@ class _ReportResult extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final job = data.request.kind == ReportKind.job;
+    final range = data.request.kind == ReportKind.range;
     final first = data.programs.firstOrNull;
+    if ((!job && data.filteredEntries.isEmpty) || (job && first == null)) {
+      return const Notice(_noProduction);
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -306,10 +415,15 @@ class _ReportResult extends StatelessWidget {
                     'Balance ${kg(data.balance)} kg',
                     data.balance > 0 ? pendingAmber : runningGreen,
                   ),
-                  ToneBadge(
-                    'Completion ${percent(data.produced, data.ordered)}',
-                    millBlue,
-                  ),
+                  if (job)
+                    ToneBadge(
+                      'Completion ${percent(data.produced, data.ordered)}',
+                      millBlue,
+                    ),
+                  if (range) ...[
+                    ToneBadge('Morning ${kg(data.morning)} kg', millBlue),
+                    ToneBadge('Night ${kg(data.night)} kg', millBlue),
+                  ],
                   if (job && first != null)
                     ToneBadge(
                       data.programs.every((p) => p['completed'] == true)
@@ -325,16 +439,26 @@ class _ReportResult extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        if (first == null) const Notice('No matching production records.'),
-        if (data.byDia.isNotEmpty) ...[
+        if (range)
+          _ReportTable(
+            title: 'Date-wise production (kg)',
+            columns: const ['Date', ...dayProgramHeaders],
+            records: [
+              for (final day in data.productionDays.entries)
+                for (final line in day.value)
+                  [dbDateLabel(day.key), ...dayProgramCells(line)],
+            ],
+            numericFrom: 7,
+          ),
+        if (!range && data.byDia.isNotEmpty) ...[
           _ReportTable(
             title: 'DIA totals (kg)',
             columns: const ['DIA', 'Day', 'Night', 'Total'],
             records: [
-              for (final dia in dias)
+              for (final dia in sortedDias(data.byDia.keys))
                 if (data.byDia[dia] case final output?)
                   [
-                    '$dia',
+                    dia,
                     kg(output.$1),
                     kg(output.$2),
                     kg(output.$1 + output.$2),
@@ -344,12 +468,12 @@ class _ReportResult extends StatelessWidget {
           ),
           const SizedBox(height: 12),
         ],
-        if (first != null) ...[
+        if (!range && first != null) ...[
           _ReportTable(
             title: 'Program quantities (kg)',
             detail: job
                 ? null
-                : 'Ordered, produced and balance show lifetime totals. Period shows output within the selected filters.',
+                : 'Produced and balance are as of the report end date. Period shows output within the selected filters.',
             columns: [
               'Job',
               'Party',
@@ -392,7 +516,7 @@ class _ReportResult extends StatelessWidget {
           ),
           const SizedBox(height: 12),
         ],
-        if (data.entries.isNotEmpty)
+        if (!range && data.filteredEntries.isNotEmpty)
           _ReportTable(
             title: 'Production history',
             columns: const [
@@ -406,7 +530,7 @@ class _ReportResult extends StatelessWidget {
               'Output (kg)',
             ],
             records: [
-              for (final row in data.entries)
+              for (final row in data.filteredEntries)
                 [
                   dbDateLabel(row['production_date']),
                   shiftName(row),

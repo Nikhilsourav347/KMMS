@@ -13,7 +13,7 @@ void main() {
     'job_date': '2026-11-20',
     'party': 'Report fixture party',
     'yarn': '60s dyed cotton and recycled polyester blend',
-    'dia': 28,
+    'dia': '28RIB',
     'position': 1,
     'loop_length': 2.65,
     'specification': 'Single jersey',
@@ -22,9 +22,9 @@ void main() {
       'Use the specified yarn lot and check the fabric for consistency.',
     ).join(' '),
     'ordered_kg': 500,
-    'produced_kg': 300,
-    'balance_kg': 200,
-    'period_kg': 24.75,
+    'produced_kg': 9.975,
+    'balance_kg': 490.025,
+    'period_kg': 2.25,
     'completed': false,
   };
   final entries = [
@@ -34,9 +34,13 @@ void main() {
         'shift': i.isEven ? 'morning' : 'night',
         'job_number': 'QA-001',
         'party': 'Report fixture party',
-        'dia': 28,
-        'program_position': i % 3 + 1,
-        'specification': 'Single jersey',
+        'job_id': 'job-1',
+        'program_id': 'program-${i ~/ 2 + 1}',
+        'dia': '28RIB',
+        'program_position': i ~/ 2 + 1,
+        'loop_length': 2.65,
+        'specification':
+            'Single jersey with a long specification to check wrapping',
         'quantity_kg': 1.125,
       },
   ];
@@ -62,17 +66,31 @@ void main() {
           request,
           {
             'programs': [
-              program,
-              {...program, 'position': 2},
-              {...program, 'position': 3},
+              for (var i = 1; i <= 33; i++)
+                {...program, 'position': i, 'id': 'program-$i'},
             ],
             'entries': entries,
+            'days': [
+              for (var i = 0; i < entries.length; i += 2)
+                {
+                  ...entries[i],
+                  'morning_kg': '1.125',
+                  'night_kg': '1.125',
+                  'daily_kg': '2.25',
+                  'ordered_kg': 500,
+                  'cumulative_kg': '9.975',
+                  'balance_kg': '490.025',
+                },
+            ],
           },
           generated: DateTime.utc(2026, 11, 25, 6),
           reference: 'UKM-QA-001',
         );
-        expect(data.ordered, grams('1500'));
-        expect(data.byDia[28], (grams('37.125'), grams('37.125')));
+        expect(data.ordered, grams('16500'));
+        expect(data.byDia['28RIB'], (
+          grams('37.125'),
+          kind == ReportKind.shift ? 0 : grams('37.125'),
+        ));
         expect(request.filename, switch (kind) {
           ReportKind.job => 'UKM_Job_QA-001_Production_Report.pdf',
           ReportKind.daily => 'UKM_Daily_Report_2026-11-25.pdf',

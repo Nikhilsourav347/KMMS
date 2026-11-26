@@ -10,16 +10,28 @@ import 'package:ukm/core/domain.dart';
 import 'package:ukm/core/auth.dart';
 import 'package:ukm/core/repository.dart';
 import 'package:ukm/core/theme.dart';
+import 'package:ukm/core/widgets.dart';
 import 'package:ukm/features/authentication/authentication.dart';
 import 'package:ukm/features/job_entry/jobs.dart';
 import 'package:ukm/features/production_entry/production.dart';
+import 'package:ukm/features/reports/reports.dart';
 
 class _ProductionFixture implements MillData {
   final entries = <Shift, Map<String, Object?>>{};
+  final registryChanges = StreamController<int>.broadcast();
+  final dias = ['24', '26', '30A', '30A'];
   List<RowData> savedPrograms = [];
+  final reportCalls = <(DateTime?, DateTime?, String?, String?, String?)>[];
 
   @override
-  Stream<int> get updates => const Stream.empty();
+  Stream<int> updates(Dataset dataset) => dataset == Dataset.machines
+      ? registryChanges.stream
+      : const Stream.empty();
+
+  @override
+  Future<List<RowData>> registeredMachines() async => [
+    for (final dia in dias) {'dia': dia},
+  ];
 
   @override
   Future<List<RowData>> jobs() async => [
@@ -27,7 +39,27 @@ class _ProductionFixture implements MillData {
   ];
 
   @override
-  Future<List<RowData>> names(String table) async => [];
+  Future<List<RowData>> names(String table) async => [
+    if (table == 'parties') {'id': 'party-1', 'name': 'Fixture party'},
+  ];
+
+  @override
+  Future<List<String>> reportDias(DateTime start, DateTime end) async => [
+    '19RIB',
+  ];
+
+  @override
+  Future<RowData> report({
+    DateTime? start,
+    DateTime? end,
+    Shift? shift,
+    String? jobId,
+    String? partyId,
+    String? dia,
+  }) async {
+    reportCalls.add((start, end, jobId, partyId, dia));
+    return {'entries': [], 'programs': [], 'days': []};
+  }
 
   @override
   Future<RowData> productionSheet(
@@ -392,13 +424,14 @@ void main() {
       await tester.ensureVisible(field);
       await tester.enterText(field, value);
     }
-    final dia = find.byType(DropdownButtonFormField<int>).first;
+    final dia = find.text('Select DIA').first;
     await tester.pumpAndSettle();
     await Scrollable.ensureVisible(tester.element(dia), alignment: .5);
     await tester.pumpAndSettle();
     await tester.tap(dia);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('24').last);
+    expect(find.text('30A'), findsOneWidget);
+    await tester.tap(find.text('30A'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save job'));
     await tester.pumpAndSettle();
@@ -415,7 +448,148 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(store.savedPrograms.single['specification'], 'Mill Herringbone');
+    expect(store.savedPrograms.single['dia'], '30A');
   });
+
+  testWidgets('open job editor gets active DIA additions, edits and removals', (
+    tester,
+  ) async {
+    final store = _ProductionFixture();
+    addTearDown(store.registryChanges.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [millDataProvider.overrideWithValue(store)],
+        child: const MaterialApp(home: Scaffold(body: JobsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New job'));
+    await tester.pumpAndSettle();
+    final picker = find.text('Select DIA').first;
+    await tester.ensureVisible(picker);
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    expect(find.text('30A'), findsOneWidget);
+    await tester.tap(find.text('Cancel').last);
+    await tester.pumpAndSettle();
+
+    store.dias
+      ..remove('24')
+      ..remove('30A')
+      ..addAll(['6', '76RIB']);
+    store.registryChanges.add(1);
+    await tester.pumpAndSettle();
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    expect(find.text('24'), findsNothing);
+    expect(find.text('30A'), findsOneWidget);
+    expect(find.text('6'), findsOneWidget);
+    expect(find.text('76RIB'), findsOneWidget);
+    await tester.tap(find.text('Cancel').last);
+    await tester.pumpAndSettle();
+
+    store.dias.clear();
+    store.registryChanges.add(2);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('No active machines with a DIA are registered.'),
+      findsOneWidget,
+    );
+  });
+
+  for (final (scope, useDia) in [
+    ('All Jobs and Parties', false),
+    ('Filter by Job Number', false),
+    ('Filter by Party Name', false),
+    ('All Jobs and Parties', true),
+    ('Filter by Job Number', true),
+    ('Filter by Party Name', true),
+  ]) {
+    testWidgets('date-range report accepts $scope with DIA filter $useDia', (
+      tester,
+    ) async {
+      final store = _ProductionFixture();
+      addTearDown(store.registryChanges.close);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [millDataProvider.overrideWithValue(store)],
+          child: const MaterialApp(home: Scaffold(body: ReportsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Date range'));
+      await tester.pumpAndSettle();
+      expect(find.text('All DIA'), findsOneWidget);
+      expect(find.textContaining('From Date'), findsOneWidget);
+      expect(find.textContaining('To Date'), findsOneWidget);
+      await tester.tap(find.text(scope));
+      await tester.pumpAndSettle();
+
+      if (scope == 'Filter by Job Number') {
+        await tester.tap(find.text('Select job number'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('QA-024'));
+        await tester.pumpAndSettle();
+        expect(find.text('Party · Fixture party'), findsOneWidget);
+        expect(find.text('Select party name'), findsNothing);
+      }
+      if (scope == 'Filter by Party Name') {
+        await tester.tap(find.text('Select party name'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Fixture party'));
+        await tester.pumpAndSettle();
+        expect(find.text('Select job number'), findsNothing);
+      }
+      if (useDia) {
+        await tester.tap(find.text('All DIA'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('19RIB'));
+        await tester.pumpAndSettle();
+      }
+
+      final generate = find.text('Generate PDF');
+      await tester.ensureVisible(generate);
+      await tester.tap(generate);
+      await tester.pumpAndSettle();
+      final (start, end, job, party, dia) = store.reportCalls.single;
+      expect(start, indiaToday());
+      expect(end, indiaToday());
+      expect(job, scope == 'Filter by Job Number' ? 'test' : null);
+      expect(party, scope == 'Filter by Party Name' ? 'party-1' : null);
+      expect(dia, useDia ? '19RIB' : null);
+      expect(
+        find.text('No production records found for the selected filters.'),
+        findsOneWidget,
+      );
+      expect(find.text('PDF preview'), findsNothing);
+
+      final from = find.byWidgetPredicate(
+        (widget) => widget is DateField && widget.label == 'From Date',
+      );
+      final today = indiaToday();
+      tester.widget<DateField>(from).onChanged!(
+        DateTime(today.year, today.month, today.day + 1),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('From Date must be on or before To Date.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.ancestor(
+                of: generate,
+                matching: find.byWidgetPredicate(
+                  (widget) => widget is FilledButton,
+                ),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
+    });
+  }
 }
 
 class _StartupAuth implements MillAuth {
@@ -458,7 +632,9 @@ class _StartupBackend implements MillData {
   @override
   final _StartupAuth auth = _StartupAuth();
   @override
-  Stream<int> get updates => const Stream.empty();
+  Stream<int> updates(Dataset dataset) => const Stream.empty();
+  @override
+  Stream<MachineStatusUpdate?> get machineStatusUpdates => const Stream.empty();
   @override
   Future<List<RowData>> machineDay(DateTime date) async => [];
   @override

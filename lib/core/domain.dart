@@ -2,7 +2,6 @@ import 'package:intl/intl.dart';
 
 const companyName = 'Unique Knitting Mills';
 const logoAsset = 'assets/images/company_logo.jpg';
-const dias = [24, 26, 28, 30, 32, 34];
 const designs = [
   'Single Jersey',
   'Loop Knit',
@@ -17,6 +16,26 @@ typedef RowData = Map<String, dynamic>;
 
 String? machineDiaValue(RowData? machine) =>
     machine?['dia_label'] as String? ?? machine?['dia']?.toString();
+
+final _diaParts = RegExp(r'[0-9]+|[^0-9]+');
+
+int compareDias(String a, String b) {
+  final left = _diaParts.allMatches(a.toLowerCase()).iterator;
+  final right = _diaParts.allMatches(b.toLowerCase()).iterator;
+  while (left.moveNext()) {
+    if (!right.moveNext()) return 1;
+    final x = left.current[0]!;
+    final y = right.current[0]!;
+    final nx = BigInt.tryParse(x);
+    final ny = BigInt.tryParse(y);
+    final order = nx != null && ny != null ? nx.compareTo(ny) : x.compareTo(y);
+    if (order != 0) return order;
+  }
+  return right.moveNext() ? -1 : a.compareTo(b);
+}
+
+List<String> sortedDias(Iterable<String> values) =>
+    values.toSet().toList()..sort(compareDias);
 
 String machineDiaLabel(RowData machine) {
   final dia = machineDiaValue(machine);

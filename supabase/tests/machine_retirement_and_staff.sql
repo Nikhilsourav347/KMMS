@@ -1,4 +1,4 @@
--- Disposable integration fixtures. Run after migration 006.
+-- Disposable integration fixtures. Run after applying all migrations.
 begin;
 
 insert into auth.users (id, email, raw_app_meta_data)
@@ -20,8 +20,8 @@ $$;
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a0060000-0000-4000-8000-000000000001', true);
-select public.ukm_save_machine(null, 'test-006-unused', 24, '', '');
-select public.ukm_save_machine(null, 'test-006-used', 24, '', '');
+select public.ukm_save_machine(null, 'test-006-unused', '24', '', '');
+select public.ukm_save_machine(null, 'test-006-used', '24', '', '');
 select set_config('request.jwt.claim.sub', 'a0060000-0000-4000-8000-000000000002', true);
 
 do $$
@@ -43,8 +43,8 @@ declare unused_id smallint; used_id smallint;
 begin
   select id into strict unused_id from public.machines where number = 'test-006-unused';
   select id into strict used_id from public.machines where number = 'test-006-used';
-  perform public.ukm_save_machine(unused_id, 'test-006-unused', 26, '', '');
-  if (select dia from public.machines where id = unused_id) <> 26 then
+  perform public.ukm_save_machine(unused_id, 'test-006-unused', '26', '', '');
+  if (select dia from public.machines where id = unused_id) <> '26' then
     raise exception 'Machine edit failed.';
   end if;
   if not public.ukm_remove_machine(unused_id) then raise exception 'Unused machine was archived.'; end if;

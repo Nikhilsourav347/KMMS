@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,16 +51,29 @@ class _MachineData implements MillData {
   final _MachineAuth auth;
   final records = <RowData>[];
   final bookings = <int, Set<String>>{};
+  final statusEvents = StreamController<MachineStatusUpdate?>.broadcast();
+  Completer<List<RowData>>? nextRead;
+  Completer<void>? nextWrite;
+  int writes = 0;
 
   @override
-  Stream<int> get updates => const Stream.empty();
+  Stream<int> updates(Dataset dataset) => const Stream.empty();
+  @override
+  Stream<MachineStatusUpdate?> get machineStatusUpdates => statusEvents.stream;
   @override
   Future<List<RowData>> registeredMachines() async => List.of(records);
   @override
-  Future<List<RowData>> machineDay(DateTime date) => registeredMachines();
+  Future<List<RowData>> machineDay(DateTime date) async =>
+      nextRead?.future ?? records.map((row) => {...row}).toList();
   @override
-  Future<void> setRunning(int id, DateTime date, bool running) async {
-    records.firstWhere((row) => row['id'] == id)['running'] = running;
+  Future<MachineStatus> setRunning(int id, DateTime date, bool running) async {
+    writes++;
+    await nextWrite?.future;
+    final row = records.firstWhere((row) => row['id'] == id);
+    final revision = (row['status_revision'] as int? ?? 0) + 1;
+    row['running'] = running;
+    row['status_revision'] = revision;
+    return (running: running, revision: revision);
   }
 
   @override
@@ -174,6 +189,126 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<CupertinoSwitch>(toggle).value, isFalse);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'manager ignores rapid taps and old snapshots, and rolls back errors',
+    (tester) async {
+      final repository = _MachineData(StaffRole.manager, machines: 1);
+      addTearDown(repository.statusEvents.close);
+      await _show(
+        tester,
+        repository,
+        const MachineScreen(role: StaffRole.manager),
+      );
+      final switchFinder = find.byType(CupertinoSwitch);
+      bool running() => tester.widget<CupertinoSwitch>(switchFinder).value;
+
+      final stale = repository.nextRead = Completer<List<RowData>>();
+      repository.statusEvents.add(null);
+      await tester.pump();
+      final write = repository.nextWrite = Completer<void>();
+      await tester.tap(switchFinder);
+      await tester.pump();
+      expect(running(), isTrue);
+      expect(find.text('Running Machines · 1'), findsOneWidget);
+      tester.widget<CupertinoSwitch>(switchFinder).onChanged!(false);
+      expect(repository.writes, 1);
+      write.complete();
+      await tester.pump();
+      expect(running(), isTrue);
+
+      stale.complete([
+        {...repository.records.single, 'running': false, 'status_revision': 0},
+      ]);
+      repository.nextRead = null;
+      repository.statusEvents.add((
+        id: 1,
+        date: isoDate(indiaToday()),
+        status: (running: false, revision: 0),
+      ));
+      await tester.pumpAndSettle();
+      expect(running(), isTrue);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      final failed = repository.nextWrite = Completer<void>();
+      await tester.tap(switchFinder);
+      await tester.pump();
+      expect(running(), isFalse);
+      failed.completeError(const MillError('Could not update fixture.'));
+      await tester.pumpAndSettle();
+      expect(running(), isTrue);
+      expect(find.text('Could not update fixture.'), findsOneWidget);
+      expect(find.text('Stopped Machines · 0'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await _show(
+        tester,
+        repository,
+        const MachineScreen(role: StaffRole.manager),
+      );
+      expect(running(), isTrue);
+    },
+  );
+
+  testWidgets('admin status follows Realtime and rotates only while running', (
+    tester,
+  ) async {
+    final repository = _MachineData(StaffRole.admin, machines: 1);
+    addTearDown(repository.statusEvents.close);
+    await _show(tester, repository, const MachineScreen(role: StaffRole.admin));
+    final gear = find.descendant(
+      of: find.byKey(const ValueKey('machine-card-1')),
+      matching: find.byType(RotationTransition),
+    );
+    double turns() => tester.widget<RotationTransition>(gear).turns.value;
+    void send(bool running, int revision) => repository.statusEvents.add((
+      id: 1,
+      date: isoDate(indiaToday()),
+      status: (running: running, revision: revision),
+    ));
+    expect(find.byType(CupertinoSwitch), findsNothing);
+    expect(find.text('Stopped'), findsOneWidget);
+    expect(turns(), 0);
+    send(true, 2);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Running'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1));
+    expect(turns(), greaterThan(0));
+    send(false, 1);
+    await tester.pump();
+    expect(find.text('Running'), findsOneWidget);
+    send(false, 3);
+    await tester.pumpAndSettle();
+    expect(find.text('Stopped'), findsOneWidget);
+    expect(turns(), 0);
+    expect(repository.writes, 0);
+  });
+
+  testWidgets('admin respects reduced motion for running machines', (
+    tester,
+  ) async {
+    final repository = _MachineData(StaffRole.admin, machines: 1);
+    addTearDown(repository.statusEvents.close);
+    repository.records.single['running'] = true;
+    await _show(
+      tester,
+      repository,
+      const MediaQuery(
+        data: MediaQueryData(disableAnimations: true, size: Size(390, 844)),
+        child: MachineScreen(role: StaffRole.admin),
+      ),
+    );
+    final gear = tester.widget<RotationTransition>(
+      find.descendant(
+        of: find.byKey(const ValueKey('machine-card-1')),
+        matching: find.byType(RotationTransition),
+      ),
+    );
+    expect(gear.turns.value, 0);
+    expect(find.text('Running'), findsOneWidget);
   });
 
   testWidgets(

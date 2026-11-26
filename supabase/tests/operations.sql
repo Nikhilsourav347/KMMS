@@ -48,20 +48,21 @@ begin
   select status into strict running_status from public.machine_status where machine_id=1;
   if running_status <> 'running' then raise exception 'Machine update failed.'; end if;
 
-  perform public.ukm_machine_dia(1::smallint,28);
-  perform public.ukm_machine_dia(2::smallint,28);
-  schedule := public.ukm_save_schedule(null,null,28,entry_day,entry_day+2,1::smallint,null,
+  perform public.ukm_machine_dia(1::smallint,'28');
+  perform public.ukm_machine_dia(2::smallint,'28');
+  perform public.ukm_machine_dia(3::smallint,'24');
+  schedule := public.ukm_save_schedule(null,null,'28',entry_day,entry_day+2,1::smallint,null,
     'UKM Test Party','Three days without a job');
-  perform public.ukm_save_schedule(null,null,28,entry_day+1,entry_day+1,2::smallint,null,null,'Parallel machine');
-  perform public.ukm_save_schedule(null,null,34,entry_day,entry_day,null,null,null,'DIA only');
+  perform public.ukm_save_schedule(null,null,'28',entry_day+1,entry_day+1,2::smallint,null,null,'Parallel machine');
+  perform public.ukm_save_schedule(null,null,'34',entry_day,entry_day,null,null,null,'DIA only');
   begin
-    perform public.ukm_save_schedule(null,null,28,entry_day+2,entry_day+3,1::smallint,null,null,'Conflict');
+    perform public.ukm_save_schedule(null,null,'28',entry_day+2,entry_day+3,1::smallint,null,null,'Conflict');
     raise exception 'Expected exclusion rule' using errcode='XX000';
   exception when raise_exception then
     if sqlerrm not like '%already has a booking%' then raise; end if;
   end;
   select updated_at into edit_version from public.schedules where id=schedule;
-  perform public.ukm_save_schedule(schedule,edit_version,28,entry_day,entry_day+3,1::smallint,null,
+  perform public.ukm_save_schedule(schedule,edit_version,'28',entry_day,entry_day+3,1::smallint,null,
     'UKM Test Party','Revised booking');
 
   payload := '[{"dia":24,"loop_length":"2.5","ordered_kg":"500.001","specification":"UKM Custom Design","remarks":"First program"},
@@ -132,9 +133,9 @@ begin
     raise exception 'Job report lost rows or counted a program twice.'; end if;
   payload := public.ukm_report(entry_day,entry_day,null,null,null,null);
   if jsonb_array_length(payload->'entries') < 3 then raise exception 'Daily report lost a shift.'; end if;
-  payload := public.ukm_report(entry_day,entry_day,'night',job,null,24);
+  payload := public.ukm_report(entry_day,entry_day,'night',job,null,'24');
   if jsonb_array_length(payload->'entries') <> 2 then raise exception 'Date/shift report filter failed.'; end if;
-  payload := public.ukm_report(entry_day-6,entry_day,null,job,null,24);
+  payload := public.ukm_report(entry_day-6,entry_day,null,job,null,'24');
   if jsonb_array_length(payload->'entries') <> 3 or (payload->'entries'->0->>'job_id')::uuid is distinct from job then
     raise exception 'Date range report filter failed.'; end if;
   payload := public.ukm_production_sheet(job,entry_day,'night');
@@ -149,7 +150,7 @@ begin
   if public.ukm_role_for_user() <> 'admin' or (select count(*) from public.machines) <> 10 then
     raise exception 'Admin read access failed.'; end if;
   begin
-    perform public.ukm_machine_dia(1::smallint,30);
+    perform public.ukm_machine_dia(1::smallint,'30');
     raise exception 'Expected role rejection';
   exception when insufficient_privilege then null;
   end;
@@ -200,8 +201,8 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','39000000-0000-0000-0000-000000000002',true);
 do $$
 begin
-  perform public.ukm_save_machine(null,'20',24,'Circular','Fixture');
-  if not exists(select from public.machines where number='20' and dia=24) then
+  perform public.ukm_save_machine(null,'20','24','Circular','Fixture');
+  if not exists(select from public.machines where number='20' and dia='24') then
     raise exception 'Admin could not register the machine.'; end if;
   begin
     perform public.ukm_set_booking(1::smallint,current_date,true);
@@ -225,7 +226,7 @@ begin
   if not exists(select from jsonb_array_elements(public.ukm_machine_day(fixture_day)) as m
       where (m->>'id')::smallint=machine and (m->>'running')::boolean) then
     raise exception 'Daily machine state could not be read.'; end if;
-  perform public.ukm_save_schedule(null,null,24,fixture_day,fixture_day+2,machine,null,null,'Legacy range');
+  perform public.ukm_save_schedule(null,null,'24',fixture_day,fixture_day+2,machine,null,null,'Legacy range');
   perform public.ukm_set_booking(machine,fixture_day+1,false);
   select m->'booked_dates' into strict dates
     from jsonb_array_elements(public.ukm_calendar(fixture_day,fixture_day+2)) as m where (m->>'id')::smallint=machine;

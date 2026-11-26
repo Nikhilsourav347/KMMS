@@ -216,16 +216,61 @@ class SupabaseMill implements MillData {
   final SupabaseClient client;
   @override
   final SupabaseMillAuth auth;
-  final _changes = StreamController<int>.broadcast();
+  final _changes = StreamController<(Dataset, int)>.broadcast();
+  final _machineStatuses = StreamController<MachineStatusUpdate?>.broadcast();
   late final StreamSubscription<AuthState> _session;
   RealtimeChannel? _channel;
   int _revision = 0;
 
   @override
-  Stream<int> get updates => _changes.stream;
+  Stream<int> updates(Dataset dataset) => _changes.stream
+      .where((event) => event.$1 == dataset)
+      .map((event) => event.$2);
 
-  void _changed() {
-    if (!_changes.isClosed) _changes.add(++_revision);
+  @override
+  Stream<MachineStatusUpdate?> get machineStatusUpdates =>
+      _machineStatuses.stream;
+
+  void _changed(Iterable<Dataset> datasets) {
+    if (!_changes.isClosed) {
+      for (final dataset in datasets) {
+        _changes.add((dataset, ++_revision));
+      }
+    }
+  }
+
+  void _machineStatusChanged([MachineStatusUpdate? update]) {
+    if (!_machineStatuses.isClosed) _machineStatuses.add(update);
+  }
+
+  MachineStatus _status(RowData row) =>
+      (running: row['running'] == true, revision: row['revision'] as int);
+
+  void _recordChanged(String table, PostgresChangePayload payload) {
+    switch (table) {
+      case 'daily_machine_status':
+        final row = payload.newRecord;
+        final id = row['machine_id'];
+        final date = row['date'];
+        if (id is int && date is String && row['revision'] is int) {
+          _machineStatusChanged((id: id, date: date, status: _status(row)));
+        } else {
+          _machineStatusChanged();
+        }
+      case 'machine_status' || 'machine_status_history':
+        _machineStatusChanged();
+      case 'machines':
+        _changed([Dataset.machines, Dataset.schedule]);
+        _machineStatusChanged();
+      case 'schedules':
+        _changed([Dataset.schedule]);
+      case 'production_entries' ||
+          'jobs' ||
+          'job_programs' ||
+          'parties' ||
+          'specifications':
+        _changed([Dataset.jobs, Dataset.production]);
+    }
   }
 
   void _subscribe() {
@@ -234,8 +279,9 @@ class SupabaseMill implements MillData {
     _channel = channel;
     for (final table in [
       'machines',
-      'profiles',
       'daily_machine_status',
+      'machine_status',
+      'machine_status_history',
       'schedules',
       'jobs',
       'job_programs',
@@ -247,11 +293,14 @@ class SupabaseMill implements MillData {
         event: PostgresChangeEvent.all,
         schema: 'public',
         table: table,
-        callback: (_) => _changed(),
+        callback: (payload) => _recordChanged(table, payload),
       );
     }
     channel.subscribe((status, _) {
-      if (status == RealtimeSubscribeStatus.subscribed) _changed();
+      if (status == RealtimeSubscribeStatus.subscribed) {
+        _changed(Dataset.values);
+        _machineStatusChanged();
+      }
     });
   }
 
@@ -263,13 +312,19 @@ class SupabaseMill implements MillData {
     _channel = null;
     if (channel != null) await client.removeChannel(channel);
     await _changes.close();
+    await _machineStatuses.close();
   }
 
   Future<dynamic> _rpc(String name, [RowData? parameters]) =>
       _cloud(() async => await client.rpc(name, params: parameters));
-  Future<void> _mutate(String name, RowData parameters) async {
+  Future<void> _mutate(
+    String name,
+    RowData parameters,
+    List<Dataset> datasets,
+  ) async {
     await _rpc(name, parameters);
-    _changed();
+    _changed(datasets);
+    if (datasets.contains(Dataset.machines)) _machineStatusChanged();
   }
 
   Future<List<RowData>> _pages(
@@ -302,18 +357,23 @@ class SupabaseMill implements MillData {
     required String dia,
     String type = '',
     String specifications = '',
-  }) => _mutate('ukm_save_machine_label', {
-    'p_id': id,
-    'p_number': number,
-    'p_dia_label': dia,
-    'p_type': type,
-    'p_specifications': specifications,
-  });
+  }) => _mutate(
+    'ukm_save_machine_label',
+    {
+      'p_id': id,
+      'p_number': number,
+      'p_dia_label': dia,
+      'p_type': type,
+      'p_specifications': specifications,
+    },
+    [Dataset.machines, Dataset.schedule],
+  );
 
   @override
   Future<bool> removeMachine(int id) async {
     final deleted = await _rpc('ukm_remove_machine', {'p_id': id}) == true;
-    _changed();
+    _changed([Dataset.machines, Dataset.schedule]);
+    _machineStatusChanged();
     return deleted;
   }
 
@@ -322,10 +382,19 @@ class SupabaseMill implements MillData {
       rows(await _rpc('ukm_machine_day', {'p_date': isoDate(date)}));
 
   @override
-  Future<void> setRunning(int id, DateTime date, bool running) => _mutate(
-    'ukm_set_running',
-    {'p_id': id, 'p_date': isoDate(date), 'p_running': running},
-  );
+  Future<MachineStatus> setRunning(int id, DateTime date, bool running) async {
+    final day = isoDate(date);
+    final status = _status(
+      await _rpc('ukm_write_running', {
+            'p_id': id,
+            'p_date': day,
+            'p_running': running,
+          })
+          as RowData,
+    );
+    _machineStatusChanged((id: id, date: day, status: status));
+    return status;
+  }
 
   @override
   Future<List<MachineScheduleRow>> machineSchedule(
@@ -353,6 +422,7 @@ class SupabaseMill implements MillData {
   Future<void> _booking(int id, DateTime date, bool booked) => _mutate(
     'ukm_set_booking',
     {'p_id': id, 'p_date': isoDate(date), 'p_booked': booked},
+    [Dataset.schedule],
   );
 
   @override
@@ -373,15 +443,19 @@ class SupabaseMill implements MillData {
     required String party,
     required String yarn,
     required List<RowData> programs,
-  }) => _mutate('ukm_save_job', {
-    'p_id': existing?['id'],
-    'p_version': existing?['updated_at'],
-    'p_date': isoDate(date),
-    'p_number': number,
-    'p_party': party,
-    'p_yarn': yarn,
-    'p_programs': programs,
-  });
+  }) => _mutate(
+    'ukm_save_job',
+    {
+      'p_id': existing?['id'],
+      'p_version': existing?['updated_at'],
+      'p_date': isoDate(date),
+      'p_number': number,
+      'p_party': party,
+      'p_yarn': yarn,
+      'p_programs': programs,
+    },
+    [Dataset.jobs, Dataset.production],
+  );
 
   @override
   Future<List<RowData>> jobs() => _pages(
@@ -423,12 +497,16 @@ class SupabaseMill implements MillData {
     DateTime date,
     Shift shift,
     List<RowData> lines,
-  ) => _mutate('ukm_save_production', {
-    'p_job': jobId,
-    'p_date': isoDate(date),
-    'p_shift': shift.name,
-    'p_lines': lines,
-  });
+  ) => _mutate(
+    'ukm_save_production',
+    {
+      'p_job': jobId,
+      'p_date': isoDate(date),
+      'p_shift': shift.name,
+      'p_lines': lines,
+    },
+    [Dataset.jobs, Dataset.production],
+  );
 
   @override
   Future<RowData> report({
@@ -437,7 +515,7 @@ class SupabaseMill implements MillData {
     Shift? shift,
     String? jobId,
     String? partyId,
-    int? dia,
+    String? dia,
   }) async =>
       await _rpc('ukm_report', {
             'p_start': start == null ? null : isoDate(start),
@@ -448,6 +526,15 @@ class SupabaseMill implements MillData {
             'p_dia': dia,
           })
           as RowData;
+
+  @override
+  Future<List<String>> reportDias(DateTime start, DateTime end) async =>
+      (await _rpc('ukm_report_dias', {
+                'p_start': isoDate(start),
+                'p_end': isoDate(end),
+              })
+              as List)
+          .cast<String>();
 }
 
 class SupabaseMillAuth implements MillAuth {

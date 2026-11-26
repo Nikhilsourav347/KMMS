@@ -217,7 +217,8 @@ class _JobDetailsState extends ConsumerState<_JobDetails> {
 class _ProgramDraft {
   _ProgramDraft([RowData? row])
     : id = row?['id'],
-      dia = row?['dia'],
+      originalDia = row?['dia']?.toString(),
+      dia = row?['dia']?.toString(),
       loop = TextEditingController(text: row?['loop_length']?.toString()),
       order = TextEditingController(text: row?['ordered_kg']?.toString()),
       spec = TextEditingController(text: row?['specification']),
@@ -232,7 +233,8 @@ class _ProgramDraft {
       : custom;
 
   final String? id;
-  int? dia;
+  final String? originalDia;
+  String? dia;
   final bool hasHistory;
   final TextEditingController loop, order, spec, remarks;
 
@@ -342,6 +344,11 @@ class _JobEditorState extends ConsumerState<_JobEditor> {
       );
       return;
     }
+    final active = ref.read(activeDiasProvider).value ?? const <String>[];
+    if (lines.any((p) => p.dia != p.originalDia && !active.contains(p.dia))) {
+      setState(() => error = 'Choose a DIA assigned to an active machine.');
+      return;
+    }
     if (lines.isEmpty || lines.any((p) => !p.complete)) {
       setState(
         () => error =
@@ -381,129 +388,165 @@ class _JobEditorState extends ConsumerState<_JobEditor> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !busy,
-    child: AlertDialog(
-      title: Text(
-        widget.job == null
-            ? 'New job'
-            : 'Edit job ${widget.job!['job_number']}',
-      ),
-      content: SizedBox(
-        width: 690,
-        child: loading
-            ? const Center(heightFactor: 3, child: CircularProgressIndicator())
-            : loadError != null
-            ? Notice(
-                loadError!,
-                action: OutlinedButton(
-                  onPressed: () {
-                    setState(() => loading = true);
-                    _load();
-                  },
-                  child: const Text('Retry'),
-                ),
-              )
-            : SingleChildScrollView(
-                child: Form(
-                  key: form,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: DateField(
-                          'Job date',
-                          date,
-                          busy ? null : (value) => setState(() => date = value),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: number,
-                        enabled: !busy,
-                        maxLength: 60,
-                        decoration: const InputDecoration(
-                          labelText: 'Job number',
-                          counterText: '',
-                        ),
-                        validator: (t) => (t ?? '').trim().isEmpty
-                            ? 'Job number is required.'
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                      SearchableNameField(
-                        label: 'Party name',
-                        controller: party,
-                        names: parties,
-                        enabled: !busy,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: yarn,
-                        enabled: !busy,
-                        maxLength: 240,
-                        decoration: const InputDecoration(
-                          labelText: 'Yarn details',
-                          counterText: '',
-                        ),
-                        validator: (t) => (t ?? '').trim().isEmpty
-                            ? 'Yarn details are required.'
-                            : null,
-                      ),
-                      const SizedBox(height: 18),
-                      for (final (index, program) in programs.indexed)
-                        Padding(
-                          key: ObjectKey(program),
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _program(index, program),
-                        ),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: busy
+  Widget build(BuildContext context) {
+    final catalog = ref.watch(activeDiasProvider);
+    final active = catalog.value ?? const <String>[];
+    return PopScope(
+      canPop: !busy,
+      child: AlertDialog(
+        title: Text(
+          widget.job == null
+              ? 'New job'
+              : 'Edit job ${widget.job!['job_number']}',
+        ),
+        content: SizedBox(
+          width: 690,
+          child: loading
+              ? const Center(
+                  heightFactor: 3,
+                  child: CircularProgressIndicator(),
+                )
+              : loadError != null
+              ? Notice(
+                  loadError!,
+                  action: OutlinedButton(
+                    onPressed: () {
+                      setState(() => loading = true);
+                      _load();
+                    },
+                    child: const Text('Retry'),
+                  ),
+                )
+              : SingleChildScrollView(
+                  child: Form(
+                    key: form,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: DateField(
+                            'Job date',
+                            date,
+                            busy
                                 ? null
-                                : () => setState(
-                                    () => programs.add(_ProgramDraft()),
-                                  ),
-                            icon: const Icon(Icons.add),
-                            label: const Text('Add program'),
+                                : (value) => setState(() => date = value),
                           ),
-                          _OrderedQuantity(programs: programs),
-                        ],
-                      ),
-                    ],
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: number,
+                          enabled: !busy,
+                          maxLength: 60,
+                          decoration: const InputDecoration(
+                            labelText: 'Job number',
+                            counterText: '',
+                          ),
+                          validator: (t) => (t ?? '').trim().isEmpty
+                              ? 'Job number is required.'
+                              : null,
+                        ),
+                        const SizedBox(height: 12),
+                        SearchableNameField(
+                          label: 'Party name',
+                          controller: party,
+                          names: parties,
+                          enabled: !busy,
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: yarn,
+                          enabled: !busy,
+                          maxLength: 240,
+                          decoration: const InputDecoration(
+                            labelText: 'Yarn details',
+                            counterText: '',
+                          ),
+                          validator: (t) => (t ?? '').trim().isEmpty
+                              ? 'Yarn details are required.'
+                              : null,
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          'Program details',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        if (catalog.isLoading && !catalog.hasValue)
+                          const LinearProgressIndicator()
+                        else if (catalog.hasError)
+                          Notice(
+                            friendlyError(catalog.error!),
+                            action: TextButton(
+                              onPressed: () =>
+                                  ref.invalidate(registeredMachinesProvider),
+                              child: const Text('Retry'),
+                            ),
+                          )
+                        else if (active.isEmpty)
+                          const Notice(
+                            'No active machines with a DIA are registered.',
+                          ),
+                        for (final (index, program) in programs.indexed)
+                          Padding(
+                            key: ObjectKey(program),
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: _program(index, program, active),
+                          ),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: busy
+                                  ? null
+                                  : () => setState(
+                                      () => programs.add(_ProgramDraft()),
+                                    ),
+                              icon: const Icon(Icons.add),
+                              label: const Text('Add program'),
+                            ),
+                            _OrderedQuantity(programs: programs),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
+        ),
+        actions: [
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
-      ),
-      actions: [
-        if (error != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
+          TextButton(
+            onPressed: busy ? null : () => Navigator.pop(context),
+            child: const Text('Cancel'),
           ),
-        TextButton(
-          onPressed: busy ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: busy || loading || loadError != null ? null : save,
-          child: Text(busy ? 'Saving…' : 'Save job'),
-        ),
-      ],
-    ),
-  );
+          FilledButton(
+            onPressed: busy || loading || loadError != null ? null : save,
+            child: Text(busy ? 'Saving…' : 'Save job'),
+          ),
+        ],
+      ),
+    );
+  }
 
-  Widget _program(int index, _ProgramDraft p) {
+  Widget _program(int index, _ProgramDraft p, List<String> active) {
     final theme = Theme.of(context);
     final hasOutput = p.hasHistory;
+    final dia = p.dia;
+    final original = p.originalDia;
+    final choices = {
+      for (final value in active) value: value,
+      if (original != null && !active.contains(original))
+        original: '$original (historical)',
+    };
     return Panel(
       padding: const EdgeInsets.all(13),
       child: Column(
@@ -543,17 +586,14 @@ class _JobEditorState extends ConsumerState<_JobEditor> {
                 children: [
                   SizedBox(
                     width: width,
-                    child: DropdownButtonFormField<int>(
-                      initialValue: p.dia,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: 'DIA'),
-                      items: [
-                        for (final value in dias)
-                          DropdownMenuItem(value: value, child: Text('$value')),
-                      ],
-                      onChanged: busy || hasOutput
-                          ? null
-                          : (value) => setState(() => p.dia = value),
+                    child: SearchPicker(
+                      label: 'Select DIA',
+                      value: dia,
+                      options: choices,
+                      placeholder: dia == null ? null : '$dia (unavailable)',
+                      enabled: !busy && !hasOutput && choices.isNotEmpty,
+                      allowClear: false,
+                      onChanged: (value) => setState(() => p.dia = value),
                     ),
                   ),
                   SizedBox(

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/domain.dart';
-import '../core/repository.dart';
 import '../features/profile/profile.dart';
 import '../core/theme.dart';
 import '../core/widgets.dart';
@@ -307,7 +305,7 @@ class _Home extends StatelessWidget {
             ),
           ),
         ),
-        const _DashboardMachineSummary(),
+        MachineStatusCounts(date: indiaToday()),
         LayoutBuilder(
           builder: (context, bounds) {
             final columns = bounds.maxWidth >= 860
@@ -411,38 +409,6 @@ class _HeaderDetail extends StatelessWidget {
       ),
     ),
   );
-}
-
-final _dashboardMachines = FutureProvider.autoDispose
-    .family<List<RowData>, DateTime>((ref, date) {
-      final repository = ref.watch(millDataProvider);
-      if (repository == null) return const [];
-      ref.watch(revisionsProvider(Dataset.machines));
-      return repository.machineDay(date);
-    });
-
-class _DashboardMachineSummary extends ConsumerWidget {
-  const _DashboardMachineSummary();
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final machines = ref.watch(_dashboardMachines(indiaToday())).value;
-    if (machines == null || (ref.watch(millDataProvider) == null)) {
-      return const SizedBox.shrink();
-    }
-    final running = machines.where((row) => row['running'] == true).length;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        ToneBadge('Total Machines · ${machines.length}', millBlue),
-        ToneBadge('Running Machines · $running', runningGreen),
-        ToneBadge(
-          'Stopped Machines · ${machines.length - running}',
-          unconfirmedGrey,
-        ),
-      ],
-    );
-  }
 }
 
 class ModulePage extends StatelessWidget {

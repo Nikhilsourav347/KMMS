@@ -14,19 +14,41 @@ final repositoryProvider = Provider<MillData>(
 enum Dataset { machines, schedule, jobs, production }
 
 final revisionsProvider = StreamProvider.autoDispose.family<int, Dataset>(
-  (ref, _) => ref.watch(repositoryProvider).updates,
+  (ref, dataset) => ref.watch(repositoryProvider).updates(dataset),
+);
+
+final registeredMachinesProvider = FutureProvider.autoDispose<List<RowData>>((
+  ref,
+) {
+  ref.watch(
+    revisionsProvider(Dataset.machines).select((update) => update.value),
+  );
+  return ref.watch(repositoryProvider).registeredMachines();
+});
+
+final activeDiasProvider = Provider.autoDispose<AsyncValue<List<String>>>(
+  (ref) => ref
+      .watch(registeredMachinesProvider)
+      .whenData(
+        (machines) => sortedDias(machines.map(machineDiaValue).nonNulls),
+      ),
 );
 
 final jobsProvider = FutureProvider.autoDispose<List<RowData>>((ref) {
-  ref.watch(revisionsProvider(Dataset.jobs));
+  ref.watch(revisionsProvider(Dataset.jobs).select((update) => update.value));
   return ref.watch(repositoryProvider).jobs();
 });
 
 typedef MachineScheduleRow = ({RowData machine, Set<String> bookedDates});
 
+typedef MachineStatus = ({bool running, int revision});
+typedef MachineStatusUpdate = ({int id, String date, MachineStatus status});
+
 abstract interface class MillData {
   MillAuth get auth;
-  Stream<int> get updates;
+  Stream<int> updates(Dataset dataset);
+  // A null event requests a full snapshot after reconnects or registry changes.
+  Stream<MachineStatusUpdate?> get machineStatusUpdates;
   Future<void> close();
   Future<List<RowData>> registeredMachines();
   Future<void> saveMachine({
@@ -38,7 +60,7 @@ abstract interface class MillData {
   });
   Future<bool> removeMachine(int id);
   Future<List<RowData>> machineDay(DateTime date);
-  Future<void> setRunning(int id, DateTime date, bool running);
+  Future<MachineStatus> setRunning(int id, DateTime date, bool running);
   Future<List<MachineScheduleRow>> machineSchedule(
     DateTime first,
     DateTime last,
@@ -69,6 +91,7 @@ abstract interface class MillData {
     Shift? shift,
     String? jobId,
     String? partyId,
-    int? dia,
+    String? dia,
   });
+  Future<List<String>> reportDias(DateTime start, DateTime end);
 }
